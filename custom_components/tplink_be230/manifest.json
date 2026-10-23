@@ -1,0 +1,10 @@
+{
+  "domain": "tplink_be230",
+  "name": "TP-Link Archer BE230",
+  "codeowners": ["@Moztoo"],
+  "config_flow": true,
+  "documentation": "https://github.com/Moztoo/ha-tplink-be230",
+  "iot_class": "local_polling",
+  "requirements": ["tplinkrouterc6u>=5.0.0"],
+  "version": "1.0.0"
+}

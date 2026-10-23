@@ -1,0 +1,51 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Conectar a TP-Link Archer BE230",
+        "description": "Configura la IP y la contraseña local de administración de tu router TP-Link Archer BE230.",
+        "data": {
+          "host": "Host / IP del Router (ej. http://192.168.1.1)",
+          "password": "Contraseña local del Router",
+          "username": "Usuario (por defecto: admin)",
+          "verify_ssl": "Verificar certificado SSL",
+          "scan_interval": "Intervalo de actualización (segundos)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Actualizar contraseña del router",
+        "description": "La contraseña del router TP-Link Archer BE230 cambió o expiró. Introduce la nueva contraseña local.",
+        "data": {
+          "password": "Nueva contraseña local del Router"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "No se pudo conectar al router. Verifica la IP y que no haya otra sesión abierta en el navegador.",
+      "invalid_auth": "Contraseña incorrecta o sesión ocupada en el router."
+    },
+    "abort": {
+      "already_configured": "Este router ya está configurado.",
+      "reauth_successful": "Contraseña actualizada correctamente."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opciones de TP-Link Archer BE230",
+        "description": "Modifica la contraseña local, la IP del router o la frecuencia de escaneo.",
+        "data": {
+          "host": "Host / IP del Router",
+          "password": "Contraseña local del Router",
+          "username": "Usuario",
+          "verify_ssl": "Verificar certificado SSL",
+          "scan_interval": "Intervalo de actualización (segundos)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "No se pudo conectar al router.",
+      "invalid_auth": "Contraseña incorrecta o sesión ocupada."
+    }
+  }
+}
