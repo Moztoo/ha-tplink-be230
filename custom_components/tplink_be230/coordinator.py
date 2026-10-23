@@ -1,15 +1,18 @@
-"""DataUpdateCoordinator for the TP-Link Archer BE230 integration."""
+"""DataUpdateCoordinator for the TP-Link Archer BE230 integration (including DHCP Manager)."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
+from json import dumps
 import logging
 from typing import Any
+from urllib.parse import urlencode
 
 from tplinkrouterc6u import TplinkRouterProvider
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -34,16 +37,16 @@ _LOGGER = logging.getLogger(__name__)
 
 def normalize_mac(mac: str) -> str:
     """Normalize MAC address to uppercase colon-separated format (AA:BB:CC:DD:EE:FF)."""
-    cleaned = mac.strip().upper().replace("-", ":")
-    return cleaned
+    return mac.strip().upper().replace("-", ":")
 
 
 class TplinkBE230Coordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Coordinator to poll TP-Link Archer BE230 router status and connected clients."""
+    """Coordinator to poll TP-Link Archer BE230 router status, clients, and DHCP server."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialize the coordinator."""
         self.entry = entry
+        self._router_lock = asyncio.Lock()
         self.known_devices: dict[str, dict[str, Any]] = {}
         self.registered_macs: set[str] = set()
         self.firmware_info: dict[str, str] = {
@@ -98,22 +101,60 @@ class TplinkBE230Coordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         )
 
-    def _poll_router_sync(self) -> dict[str, Any]:
-        """Fetch firmware and status from the router synchronously in executor."""
-        router = TplinkRouterProvider.get_client(
+    def _get_client(self):
+        """Instantiate the tplinkrouterc6u client."""
+        return TplinkRouterProvider.get_client(
             self.host,
             self.password,
             self.username,
             _LOGGER,
             self.verify_ssl,
         )
+
+    def _poll_router_sync(self) -> dict[str, Any]:
+        """Fetch firmware, status, DHCP settings, leases, and reservations in a single session."""
+        router = self._get_client()
         try:
             router.authorize()
             fw = router.get_firmware()
             status = router.get_status()
+
+            reservations = []
+            try:
+                reservations = router.get_ipv4_reservations()
+            except Exception as err:
+                _LOGGER.debug("Could not fetch IPv4 reservations: %s", err)
+
+            leases = []
+            try:
+                leases = router.get_ipv4_dhcp_leases()
+            except Exception as err:
+                _LOGGER.debug("Could not fetch IPv4 DHCP leases: %s", err)
+
+            dhcps_settings: dict[str, Any] = {}
+            try:
+                dhcps_url = getattr(router, "_url_ipv4_dhcps", "admin/dhcps?form=setting")
+                raw_dhcps = router.request(dhcps_url, "operation=read")
+                if isinstance(raw_dhcps, dict):
+                    dhcps_settings = {
+                        "enabled": str(raw_dhcps.get("enable", "on")).lower() in ("on", "true", "1"),
+                        "ip_start": raw_dhcps.get("ipaddr_start", ""),
+                        "ip_end": raw_dhcps.get("ipaddr_end", ""),
+                        "lease_time": raw_dhcps.get("leasetime", ""),
+                        "gateway": raw_dhcps.get("gateway", ""),
+                        "pri_dns": raw_dhcps.get("pri_dns", ""),
+                        "snd_dns": raw_dhcps.get("snd_dns", ""),
+                        "domain": raw_dhcps.get("domain", ""),
+                    }
+            except Exception as err:
+                _LOGGER.debug("Could not fetch DHCP server settings: %s", err)
+
             return {
                 "firmware": fw,
                 "status": status,
+                "reservations": reservations,
+                "leases": leases,
+                "dhcps_settings": dhcps_settings,
             }
         finally:
             try:
@@ -123,13 +164,7 @@ class TplinkBE230Coordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def reboot_router_sync(self) -> None:
         """Reboot the router synchronously in executor."""
-        router = TplinkRouterProvider.get_client(
-            self.host,
-            self.password,
-            self.username,
-            _LOGGER,
-            self.verify_ssl,
-        )
+        router = self._get_client()
         try:
             router.authorize()
             router.reboot()
@@ -139,18 +174,131 @@ class TplinkBE230Coordinator(DataUpdateCoordinator[dict[str, Any]]):
             except Exception:
                 pass
 
+    def _add_or_update_reservation_sync(
+        self, mac: str, ip: str, hostname: str = "", enable: bool = True
+    ) -> None:
+        """Add or update a DHCP address reservation on the router."""
+        router = self._get_client()
+        try:
+            router.authorize()
+            norm_mac = normalize_mac(mac)
+            # Check if reservation for this MAC already exists; if so, remove first
+            try:
+                existing = router.get_ipv4_reservations()
+                for r in existing:
+                    if normalize_mac(r.macaddr) == norm_mac:
+                        router.delete_ipv4_reservation(norm_mac)
+                        break
+            except Exception as err:
+                _LOGGER.debug("Pre-check before reservation insert: %s", err)
+
+            router.add_ipv4_reservation(norm_mac, ip.strip(), hostname.strip(), enable)
+        finally:
+            try:
+                router.logout()
+            except Exception:
+                pass
+
+    def _delete_reservation_sync(self, mac: str) -> None:
+        """Delete a DHCP address reservation from the router."""
+        router = self._get_client()
+        try:
+            router.authorize()
+            router.delete_ipv4_reservation(normalize_mac(mac))
+        finally:
+            try:
+                router.logout()
+            except Exception:
+                pass
+
+    def _update_dhcp_server_sync(self, settings: dict[str, Any]) -> None:
+        """Update DHCP server pool and DNS settings on the router."""
+        router = self._get_client()
+        try:
+            router.authorize()
+            dhcps_url = getattr(router, "_url_ipv4_dhcps", "admin/dhcps?form=setting")
+            dhcps_write_url = getattr(router, "_url_ipv4_dhcps_write", dhcps_url)
+            current = router.request(dhcps_url, "operation=read")
+            if not isinstance(current, dict):
+                current = {}
+
+            enable_val = settings.get("enabled")
+            if enable_val is None:
+                enable_str = current.get("enable", "on")
+            else:
+                enable_str = "on" if enable_val else "off"
+
+            payload = {
+                "operation": "write",
+                "enable": enable_str,
+                "ipaddr_start": settings.get("ip_start") or current.get("ipaddr_start", ""),
+                "ipaddr_end": settings.get("ip_end") or current.get("ipaddr_end", ""),
+                "leasetime": str(settings.get("lease_time") or current.get("leasetime", "120")),
+                "gateway": settings.get("gateway") or current.get("gateway", ""),
+                "pri_dns": settings.get("pri_dns") if "pri_dns" in settings else current.get("pri_dns", ""),
+                "snd_dns": settings.get("snd_dns") if "snd_dns" in settings else current.get("snd_dns", ""),
+                "domain": settings.get("domain") if "domain" in settings else current.get("domain", ""),
+            }
+            # Remove empty optional keys if router did not have them
+            clean_payload = {k: v for k, v in payload.items() if v != "" or k in ("pri_dns", "snd_dns")}
+            router.request(dhcps_write_url, urlencode(clean_payload))
+        finally:
+            try:
+                router.logout()
+            except Exception:
+                pass
+
+    async def async_add_dhcp_reservation(
+        self, mac: str, ip: str, hostname: str = "", enable: bool = True
+    ) -> None:
+        """Add or update a DHCP address reservation and refresh coordinator."""
+        async with self._router_lock:
+            try:
+                await self.hass.async_add_executor_job(
+                    self._add_or_update_reservation_sync, mac, ip, hostname, enable
+                )
+            except Exception as err:
+                raise HomeAssistantError(f"Failed to save DHCP reservation for {mac} ({ip}): {err}") from err
+        await self.async_request_refresh()
+
+    async def async_delete_dhcp_reservation(self, mac: str) -> None:
+        """Delete a DHCP address reservation and refresh coordinator."""
+        async with self._router_lock:
+            try:
+                await self.hass.async_add_executor_job(
+                    self._delete_reservation_sync, mac
+                )
+            except Exception as err:
+                raise HomeAssistantError(f"Failed to delete DHCP reservation for {mac}: {err}") from err
+        await self.async_request_refresh()
+
+    async def async_update_dhcp_server(self, settings: dict[str, Any]) -> None:
+        """Update DHCP server settings and refresh coordinator."""
+        async with self._router_lock:
+            try:
+                await self.hass.async_add_executor_job(
+                    self._update_dhcp_server_sync, settings
+                )
+            except Exception as err:
+                raise HomeAssistantError(f"Failed to update DHCP server settings: {err}") from err
+        await self.async_request_refresh()
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from the TP-Link Archer BE230 router."""
-        try:
-            raw = await self.hass.async_add_executor_job(self._poll_router_sync)
-        except Exception as err:
-            err_msg = str(err)
-            if "Login failed" in err_msg or "Incorrect" in err_msg or "auth" in err_msg.lower():
-                raise ConfigEntryAuthFailed(f"Error de autenticación en {self.host}: {err}") from err
-            raise UpdateFailed(f"Error comunicando con {self.host}: {err}") from err
+        async with self._router_lock:
+            try:
+                raw = await self.hass.async_add_executor_job(self._poll_router_sync)
+            except Exception as err:
+                err_msg = str(err)
+                if "Login failed" in err_msg or "Incorrect" in err_msg or "auth" in err_msg.lower():
+                    raise ConfigEntryAuthFailed(f"Authentication failed on {self.host}: {err}") from err
+                raise UpdateFailed(f"Error communicating with {self.host}: {err}") from err
 
         fw = raw["firmware"]
         status = raw["status"]
+        reservations_raw = raw.get("reservations", [])
+        leases_raw = raw.get("leases", [])
+        dhcps_settings = raw.get("dhcps_settings", {})
         now_iso = datetime.now(timezone.utc).isoformat()
 
         if fw:
@@ -160,7 +308,32 @@ class TplinkBE230Coordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "firmware_version": fw.firmware_version or "Unknown",
             }
 
-        # Mark all previously known devices as inactive until seen in current poll
+        reservations_by_mac: dict[str, dict[str, Any]] = {}
+        reservations_list: list[dict[str, Any]] = []
+        for r in reservations_raw:
+            rmac = normalize_mac(r.macaddr)
+            r_dict = {
+                "mac": rmac,
+                "ip": str(r.ipaddr),
+                "hostname": (r.hostname or "").strip() or f"Device {rmac[-8:]}",
+                "enabled": bool(getattr(r, "enabled", True)),
+            }
+            reservations_by_mac[rmac] = r_dict
+            reservations_list.append(r_dict)
+
+        leases_by_mac: dict[str, dict[str, Any]] = {}
+        leases_list: list[dict[str, Any]] = []
+        for l in leases_raw:
+            lmac = normalize_mac(l.macaddr)
+            l_dict = {
+                "mac": lmac,
+                "ip": str(l.ipaddr),
+                "hostname": (l.hostname or "").strip() or f"Device {lmac[-8:]}",
+                "lease_time": str(getattr(l, "lease_time", "")),
+            }
+            leases_by_mac[lmac] = l_dict
+            leases_list.append(l_dict)
+
         for dev in self.known_devices.values():
             dev["active"] = False
 
@@ -174,13 +347,20 @@ class TplinkBE230Coordinator(DataUpdateCoordinator[dict[str, Any]]):
             band = NETWORK_BANDS.get(net_code, "Unknown")
             is_active = bool(getattr(d, "active", True))
 
+            res_info = reservations_by_mac.get(mac)
+            lease_info = leases_by_mac.get(mac)
+
             hostname = (d.hostname or "").strip()
+            if (not hostname or hostname == "--") and res_info:
+                hostname = res_info["hostname"]
+            if (not hostname or hostname == "--") and lease_info:
+                hostname = lease_info["hostname"]
             if not hostname or hostname == "--":
                 hostname = f"Device {mac[-8:]}"
 
             dev_dict = {
                 "mac": mac,
-                "ip": str(d.ipaddr) if d.ipaddr else "0.0.0.0",
+                "ip": str(d.ipaddr) if d.ipaddr else (res_info["ip"] if res_info else "0.0.0.0"),
                 "hostname": hostname,
                 "network": net_label,
                 "network_type": net_code,
@@ -189,6 +369,11 @@ class TplinkBE230Coordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "is_guest": net_code.startswith("guest_"),
                 "is_iot": net_code.startswith("iot_"),
                 "active": is_active,
+                "is_reserved": res_info is not None,
+                "reserved_ip": res_info["ip"] if res_info else None,
+                "reservation_name": res_info["hostname"] if res_info else None,
+                "reservation_enabled": res_info["enabled"] if res_info else None,
+                "lease_time": lease_info["lease_time"] if lease_info else None,
                 "signal": getattr(d, "signal", None),
                 "down_speed": getattr(d, "down_speed", None),
                 "up_speed": getattr(d, "up_speed", None),
@@ -208,6 +393,45 @@ class TplinkBE230Coordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             if mac not in self.registered_macs:
                 new_macs.append(mac)
+
+        # Also ensure any offline reserved device appears in known_devices
+        for rmac, rinfo in reservations_by_mac.items():
+            if rmac not in self.known_devices:
+                self.known_devices[rmac] = {
+                    "mac": rmac,
+                    "ip": rinfo["ip"],
+                    "hostname": rinfo["hostname"],
+                    "network": "Offline (Reserved)",
+                    "network_type": "unknown",
+                    "band": "Offline",
+                    "is_wired": False,
+                    "is_guest": False,
+                    "is_iot": False,
+                    "active": False,
+                    "is_reserved": True,
+                    "reserved_ip": rinfo["ip"],
+                    "reservation_name": rinfo["hostname"],
+                    "reservation_enabled": rinfo["enabled"],
+                    "lease_time": "Permanent",
+                    "signal": None,
+                    "down_speed": None,
+                    "up_speed": None,
+                    "tx_rate": None,
+                    "rx_rate": None,
+                    "packets_sent": None,
+                    "packets_received": None,
+                    "online_time": None,
+                    "traffic_usage": None,
+                    "ssid": None,
+                    "last_seen": None,
+                }
+                if rmac not in self.registered_macs:
+                    new_macs.append(rmac)
+            else:
+                self.known_devices[rmac]["is_reserved"] = True
+                self.known_devices[rmac]["reserved_ip"] = rinfo["ip"]
+                self.known_devices[rmac]["reservation_name"] = rinfo["hostname"]
+                self.known_devices[rmac]["reservation_enabled"] = rinfo["enabled"]
 
         if new_macs:
             async_dispatcher_send(
@@ -242,6 +466,9 @@ class TplinkBE230Coordinator(DataUpdateCoordinator[dict[str, Any]]):
             "guest_5g_enable": getattr(status, "guest_5g_enable", None),
             "iot_2g_enable": getattr(status, "iot_2g_enable", None),
             "iot_5g_enable": getattr(status, "iot_5g_enable", None),
+            "dhcp_server": dhcps_settings,
+            "dhcp_reservations": reservations_list,
+            "dhcp_leases": leases_list,
             "devices": list(self.known_devices.values()),
             "active_devices": active_devices_list,
             "last_update": now_iso,

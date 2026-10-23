@@ -1,7 +1,10 @@
 /**
- * TP-Link Archer BE230 Network Card - Theme-Aware Lovelace Web Component
- * Supports both a compact Front-Page Overview mode (`overview: true`)
- * and a full Network Detail mode (`overview: false`) with IP, MAC, and Network badges.
+ * TP-Link Archer BE230 Network & DHCP Manager Card - Theme-Aware Lovelace Web Component
+ * Supports:
+ * - Compact Front-Page Overview mode (`overview: true`)
+ * - Full Network Detail mode (`overview: false`) with IP, MAC, Network badges & 1-click IP Pinning
+ * - Interactive DHCP Manager (`view: "dhcp"` or toggled via header tab) to manage Static IP
+ *   Reservations, Active DHCP Leases, and DHCP Server Pool/DNS settings directly from Home Assistant.
  */
 class TplinkBe230Card extends HTMLElement {
   constructor() {
@@ -11,10 +14,18 @@ class TplinkBe230Card extends HTMLElement {
     this._config = null;
     this._overview = false;
     this._compact = false;
-    this._filter = "active"; // active | all | 5g | 2g | wired | guest_iot
-    this._ovBandFilter = "all"; // all | 5g | 2g | wired | guest_iot
+    this._view = "clients"; // clients | dhcp
+    this._filter = "active"; // active | all | 5g | 2g | wired | guest_iot | reserved
+    this._dhcpFilter = "all"; // all | reserved | dynamic
+    this._ovBandFilter = "all";
     this._search = "";
     this._copiedText = null;
+
+    // DHCP Editor State
+    this._editingReservation = null; // { mac, ip, hostname, isNew }
+    this._editingPool = false;
+    this._busy = false;
+    this._statusMsg = null; // { text, type: "ok" | "err" }
   }
 
   static getStubConfig() {
@@ -22,6 +33,7 @@ class TplinkBe230Card extends HTMLElement {
       title: "TP-Link Archer BE230",
       overview: false,
       compact: false,
+      default_view: "clients",
       show_offline: false,
       detail_path: "/dashboard-testdashboard/network",
     };
@@ -32,6 +44,7 @@ class TplinkBe230Card extends HTMLElement {
       title: "TP-Link Archer BE230",
       overview: false,
       compact: false,
+      default_view: "clients",
       show_offline: false,
       detail_path: "/dashboard-testdashboard/network",
       summary_entity: null,
@@ -39,6 +52,7 @@ class TplinkBe230Card extends HTMLElement {
     };
     this._overview = Boolean(this._config.overview);
     this._compact = Boolean(this._config.compact);
+    this._view = this._config.default_view === "dhcp" ? "dhcp" : "clients";
     if (this._config.show_offline) {
       this._filter = "all";
     }
@@ -51,6 +65,8 @@ class TplinkBe230Card extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     if (!this._config) return;
+    // Avoid clobbering active form inputs while user is typing in DHCP editor
+    if (this._editingReservation || this._editingPool) return;
     this._render();
   }
 
@@ -100,10 +116,77 @@ class TplinkBe230Card extends HTMLElement {
     }, 1400);
   }
 
+  _showNotice(text, type = "ok") {
+    this._statusMsg = { text, type };
+    this._render();
+    setTimeout(() => {
+      if (this._statusMsg?.text === text) {
+        this._statusMsg = null;
+        this._render();
+      }
+    }, 4000);
+  }
+
+  async _saveReservation(mac, ip, hostname) {
+    if (!this._hass) return;
+    this._busy = true;
+    this._editingReservation = null;
+    this._render();
+    try {
+      await this._hass.callService("tplink_be230", "add_dhcp_reservation", {
+        mac: mac.trim().toUpperCase().replace(/-/g, ":"),
+        ip: ip.trim(),
+        hostname: (hostname || "").trim(),
+        enable: true,
+      });
+      this._showNotice(`Saved static reservation: ${ip} → ${mac}`, "ok");
+    } catch (err) {
+      this._showNotice(`Error saving reservation: ${err?.message || err}`, "err");
+    } finally {
+      this._busy = false;
+      this._render();
+    }
+  }
+
+  async _deleteReservation(mac) {
+    if (!this._hass) return;
+    this._busy = true;
+    this._editingReservation = null;
+    this._render();
+    try {
+      await this._hass.callService("tplink_be230", "delete_dhcp_reservation", {
+        mac: mac.trim().toUpperCase().replace(/-/g, ":"),
+      });
+      this._showNotice(`Removed static reservation for ${mac}`, "ok");
+    } catch (err) {
+      this._showNotice(`Error removing reservation: ${err?.message || err}`, "err");
+    } finally {
+      this._busy = false;
+      this._render();
+    }
+  }
+
+  async _savePoolSettings(settings) {
+    if (!this._hass) return;
+    this._busy = true;
+    this._editingPool = false;
+    this._render();
+    try {
+      await this._hass.callService("tplink_be230", "set_dhcp_server", settings);
+      this._showNotice("Updated DHCP Server pool & DNS settings", "ok");
+    } catch (err) {
+      this._showNotice(`Error updating DHCP Server: ${err?.message || err}`, "err");
+    } finally {
+      this._busy = false;
+      this._render();
+    }
+  }
+
   _discoverData() {
     const states = this._hass?.states || {};
     const trackerByMac = new Map();
     let summarySensor = null;
+    let dhcpSensor = null;
 
     if (this._config.summary_entity && states[this._config.summary_entity]) {
       summarySensor = states[this._config.summary_entity];
@@ -117,9 +200,28 @@ class TplinkBe230Card extends HTMLElement {
             eid.includes("dispositivos_conectados"))
         ) {
           summarySensor = st;
-          break;
+        }
+        if (eid.startsWith("sensor.") && eid.includes("dhcp_reservations")) {
+          dhcpSensor = st;
         }
       }
+    }
+
+    const attrs = summarySensor?.attributes || {};
+    const dhcpServer = attrs.dhcp_server || dhcpSensor?.attributes?.dhcp_server || {};
+    const rawReservations = attrs.dhcp_reservations || dhcpSensor?.attributes?.reservations || [];
+    const rawLeases = attrs.dhcp_leases || dhcpSensor?.attributes?.leases || [];
+
+    const resByMac = new Map();
+    for (const r of rawReservations) {
+      const m = String(r.mac || "").toUpperCase().replace(/-/g, ":");
+      if (m) resByMac.set(m, r);
+    }
+
+    const leaseByMac = new Map();
+    for (const l of rawLeases) {
+      const m = String(l.mac || "").toUpperCase().replace(/-/g, ":");
+      if (m) leaseByMac.set(m, l);
     }
 
     for (const [eid, st] of Object.entries(states)) {
@@ -136,15 +238,22 @@ class TplinkBe230Card extends HTMLElement {
         .replace(/-/g, ":");
       if (!mac) continue;
 
+      const resInfo = resByMac.get(mac);
+      const leaseInfo = leaseByMac.get(mac);
+
       trackerByMac.set(mac, {
         entityId: eid,
-        hostname: a.hostname || a.friendly_name || eid.replace("device_tracker.", ""),
-        ip: a.ip || a.ip_address || "--",
+        hostname: a.hostname || a.friendly_name || resInfo?.hostname || eid.replace("device_tracker.", ""),
+        ip: a.ip || a.ip_address || resInfo?.ip || "--",
         mac,
         network: a.network || this._labelForType(a.network_type),
         network_type: a.network_type || "unknown",
         band: a.band || this._bandForType(a.network_type),
         active: st.state === "home" || Boolean(a.active),
+        is_reserved: Boolean(a.is_reserved || resInfo),
+        reserved_ip: a.reserved_ip || resInfo?.ip || null,
+        reservation_name: a.reservation_name || resInfo?.hostname || null,
+        lease_time: a.lease_time || leaseInfo?.lease_time || null,
         signal: a.signal ?? null,
         packets_sent: a.packets_sent ?? null,
         packets_received: a.packets_received ?? null,
@@ -161,15 +270,21 @@ class TplinkBe230Card extends HTMLElement {
           .replace(/-/g, ":");
         if (!mac) continue;
         const existing = trackerByMac.get(mac);
+        const resInfo = resByMac.get(mac);
+        const leaseInfo = leaseByMac.get(mac);
         trackerByMac.set(mac, {
           entityId: existing?.entityId || null,
-          hostname: d.hostname || existing?.hostname || `Device ${mac.slice(-8)}`,
-          ip: d.ip || existing?.ip || "--",
+          hostname: d.hostname || existing?.hostname || resInfo?.hostname || `Device ${mac.slice(-8)}`,
+          ip: d.ip || existing?.ip || resInfo?.ip || "--",
           mac,
           network: d.network || existing?.network || this._labelForType(d.network_type),
           network_type: d.network_type || existing?.network_type || "unknown",
           band: d.band || existing?.band || this._bandForType(d.network_type),
           active: d.active !== undefined ? Boolean(d.active) : Boolean(existing?.active),
+          is_reserved: Boolean(d.is_reserved ?? existing?.is_reserved ?? resInfo),
+          reserved_ip: d.reserved_ip || existing?.reserved_ip || resInfo?.ip || null,
+          reservation_name: d.reservation_name || existing?.reservation_name || resInfo?.hostname || null,
+          lease_time: d.lease_time || existing?.lease_time || leaseInfo?.lease_time || null,
           signal: d.signal ?? existing?.signal ?? null,
           packets_sent: d.packets_sent ?? existing?.packets_sent ?? null,
           packets_received: d.packets_received ?? existing?.packets_received ?? null,
@@ -180,12 +295,32 @@ class TplinkBe230Card extends HTMLElement {
       }
     }
 
+    // Ensure any reservation or lease not yet in trackerByMac is included
+    for (const [mac, r] of resByMac.entries()) {
+      if (!trackerByMac.has(mac)) {
+        trackerByMac.set(mac, {
+          entityId: null,
+          hostname: r.hostname || `Device ${mac.slice(-8)}`,
+          ip: r.ip || "--",
+          mac,
+          network: "Reserved (Offline)",
+          network_type: "unknown",
+          band: "Offline",
+          active: false,
+          is_reserved: true,
+          reserved_ip: r.ip,
+          reservation_name: r.hostname,
+          lease_time: "Permanent",
+          signal: null,
+        });
+      }
+    }
+
     const devices = Array.from(trackerByMac.values()).sort((a, b) => {
       if (a.active !== b.active) return a.active ? -1 : 1;
       return this._ipToInt(a.ip) - this._ipToInt(b.ip);
     });
 
-    const attrs = summarySensor?.attributes || {};
     return {
       summaryEntityId: summarySensor?.entity_id || null,
       model: attrs.model || "Archer BE230",
@@ -194,6 +329,9 @@ class TplinkBe230Card extends HTMLElement {
       lanIp: attrs.lan_ip || "192.168.1.1",
       cpuUsage: attrs.cpu_usage ?? null,
       memUsage: attrs.mem_usage ?? null,
+      dhcpServer,
+      reservationsCount: rawReservations.length,
+      leasesCount: rawLeases.length,
       devices,
     };
   }
@@ -264,6 +402,8 @@ class TplinkBe230Card extends HTMLElement {
           --be-text-secondary: var(--secondary-text-color, #9496a4);
           --be-accent: var(--primary-color, #00b4d8);
           --be-online: var(--success-color, #22c55e);
+          --be-warn: var(--warning-color, #fbbf24);
+          --be-danger: var(--error-color, #ef4444);
           --be-5g: #38bdf8;
           --be-2g: #a78bfa;
           --be-lan: #34d399;
@@ -335,7 +475,7 @@ class TplinkBe230Card extends HTMLElement {
           padding: 4px 10px;
           font-size: 0.72rem;
           outline: none;
-          width: 145px;
+          width: 150px;
         }
         .search-input:focus {
           border-color: var(--be-accent);
@@ -370,6 +510,89 @@ class TplinkBe230Card extends HTMLElement {
           background: color-mix(in srgb, var(--be-accent) 18%, transparent);
           color: var(--be-accent);
           border-color: color-mix(in srgb, var(--be-accent) 42%, transparent);
+        }
+        button.btn.primary {
+          background: color-mix(in srgb, var(--be-online) 18%, transparent);
+          color: var(--be-online);
+          border-color: color-mix(in srgb, var(--be-online) 42%, transparent);
+        }
+        button.btn.danger {
+          background: color-mix(in srgb, var(--be-danger) 16%, transparent);
+          color: var(--be-danger);
+          border-color: color-mix(in srgb, var(--be-danger) 38%, transparent);
+        }
+
+        /* Notice Banner */
+        .notice {
+          padding: 7px 11px;
+          border-radius: 8px;
+          font-size: 0.74rem;
+          font-weight: 600;
+          margin-bottom: 10px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+        }
+        .notice.ok {
+          background: color-mix(in srgb, var(--be-online) 16%, transparent);
+          border: 1px solid color-mix(in srgb, var(--be-online) 40%, transparent);
+          color: var(--be-online);
+        }
+        .notice.err {
+          background: color-mix(in srgb, var(--be-danger) 16%, transparent);
+          border: 1px solid color-mix(in srgb, var(--be-danger) 40%, transparent);
+          color: var(--be-danger);
+        }
+
+        /* Inline DHCP Editor Form */
+        .editor-box {
+          background: var(--be-surface);
+          border: 1px solid color-mix(in srgb, var(--be-accent) 50%, var(--be-divider));
+          border-radius: 10px;
+          padding: 12px;
+          margin-bottom: 12px;
+        }
+        .editor-title {
+          font-size: 0.8rem;
+          font-weight: 700;
+          margin-bottom: 8px;
+          color: var(--be-accent);
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+        }
+        .editor-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+          gap: 8px;
+          margin-bottom: 10px;
+        }
+        .field-label {
+          font-size: 0.65rem;
+          color: var(--be-text-secondary);
+          margin-bottom: 3px;
+          display: block;
+          font-weight: 600;
+        }
+        .field-input {
+          width: 100%;
+          box-sizing: border-box;
+          background: var(--be-input);
+          border: 1px solid var(--be-divider);
+          border-radius: 6px;
+          padding: 5px 8px;
+          color: var(--be-text-primary);
+          font-size: 0.75rem;
+          font-family: inherit;
+          outline: none;
+        }
+        .field-input:focus {
+          border-color: var(--be-accent);
+        }
+        .editor-actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 6px;
         }
 
         /* Overview Mode Styles */
@@ -493,7 +716,7 @@ class TplinkBe230Card extends HTMLElement {
           flex-shrink: 0;
         }
 
-        /* Detailed Mode Styles */
+        /* Detailed Mode & DHCP Manager Styles */
         .summary-bar {
           display: flex;
           align-items: center;
@@ -519,7 +742,7 @@ class TplinkBe230Card extends HTMLElement {
         }
         .devices-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+          grid-template-columns: repeat(auto-fill, minmax(265px, 1fr));
           gap: 9px;
         }
         ha-card.compact .devices-grid {
@@ -591,7 +814,7 @@ class TplinkBe230Card extends HTMLElement {
           text-overflow: ellipsis;
         }
         .net-badge {
-          font-size: 0.66rem;
+          font-size: 0.65rem;
           font-weight: 700;
           padding: 2px 7px;
           border-radius: 999px;
@@ -622,13 +845,20 @@ class TplinkBe230Card extends HTMLElement {
         .dev-badges {
           display: flex;
           align-items: center;
+          justify-content: space-between;
           gap: 6px;
+          flex-wrap: wrap;
+        }
+        .dev-pills-left {
+          display: flex;
+          align-items: center;
+          gap: 5px;
           flex-wrap: wrap;
         }
         .mono-pill {
           font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-          font-size: 0.69rem;
-          padding: 2px 7px;
+          font-size: 0.68rem;
+          padding: 2px 6px;
           border-radius: 6px;
           background: var(--be-input);
           border: 1px solid var(--be-divider);
@@ -644,8 +874,70 @@ class TplinkBe230Card extends HTMLElement {
         }
         .mono-pill .lbl {
           color: var(--be-text-secondary);
-          font-size: 0.63rem;
+          font-size: 0.61rem;
           font-weight: 600;
+        }
+        .dhcp-tag {
+          font-size: 0.63rem;
+          font-weight: 700;
+          padding: 2px 6px;
+          border-radius: 5px;
+          cursor: pointer;
+          border: 1px solid var(--be-divider);
+          background: var(--be-input);
+          color: var(--be-text-secondary);
+          transition: all 0.15s ease;
+        }
+        .dhcp-tag.reserved {
+          background: color-mix(in srgb, var(--be-online) 16%, transparent);
+          border-color: color-mix(in srgb, var(--be-online) 40%, transparent);
+          color: var(--be-online);
+        }
+        .dhcp-tag:hover {
+          border-color: var(--be-accent);
+          color: var(--be-text-primary);
+        }
+
+        /* DHCP Table Layout */
+        .dhcp-list {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        .dhcp-row {
+          background: var(--be-surface);
+          border: 1px solid var(--be-divider);
+          border-radius: 9px;
+          padding: 8px 12px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+        .dhcp-row.reserved {
+          border-left: 3px solid var(--be-online);
+        }
+        .dhcp-row.dynamic {
+          border-left: 3px solid var(--be-5g);
+        }
+        .dhcp-main {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 180px;
+          flex: 1;
+        }
+        .dhcp-meta {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+        .dhcp-actions {
+          display: flex;
+          align-items: center;
+          gap: 5px;
         }
         .empty-state {
           text-align: center;
@@ -665,9 +957,125 @@ class TplinkBe230Card extends HTMLElement {
           </div>
           <div class="controls" id="header-controls"></div>
         </div>
+        <div id="notice-area"></div>
+        <div id="editor-area"></div>
         <div id="card-body"></div>
       </ha-card>
     `;
+  }
+
+  _renderEditor(data) {
+    const editorArea = this.shadowRoot.getElementById("editor-area");
+    if (!editorArea) return;
+
+    if (this._editingReservation) {
+      const r = this._editingReservation;
+      editorArea.innerHTML = `
+        <div class="editor-box">
+          <div class="editor-title">
+            <span>📌 ${r.isNew ? "Create Static DHCP Reservation" : `Edit Static IP Reservation (${this._escape(r.hostname)})`}</span>
+          </div>
+          <div class="editor-grid">
+            <div>
+              <label class="field-label">MAC Address</label>
+              <input class="field-input" id="ed-mac" value="${this._escape(r.mac)}" placeholder="AA:BB:CC:DD:EE:FF" />
+            </div>
+            <div>
+              <label class="field-label">Reserved IPv4 Address</label>
+              <input class="field-input" id="ed-ip" value="${this._escape(r.ip)}" placeholder="192.168.1.50" />
+            </div>
+            <div>
+              <label class="field-label">Description / Hostname</label>
+              <input class="field-input" id="ed-name" value="${this._escape(r.hostname)}" placeholder="homelab-node" />
+            </div>
+          </div>
+          <div class="editor-actions">
+            ${
+              !r.isNew && r.alreadyReserved
+                ? `<button class="btn danger" id="ed-delete">🗑️ Remove Reservation</button>`
+                : ""
+            }
+            <button class="btn" id="ed-cancel">Cancel</button>
+            <button class="btn primary" id="ed-save">${this._busy ? "Saving..." : "💾 Save to Router"}</button>
+          </div>
+        </div>
+      `;
+      editorArea.querySelector("#ed-cancel")?.addEventListener("click", () => {
+        this._editingReservation = null;
+        this._render();
+      });
+      editorArea.querySelector("#ed-delete")?.addEventListener("click", () => {
+        this._deleteReservation(r.mac);
+      });
+      editorArea.querySelector("#ed-save")?.addEventListener("click", () => {
+        const mac = editorArea.querySelector("#ed-mac").value;
+        const ip = editorArea.querySelector("#ed-ip").value;
+        const name = editorArea.querySelector("#ed-name").value;
+        if (mac && ip) {
+          this._saveReservation(mac, ip, name);
+        }
+      });
+      return;
+    }
+
+    if (this._editingPool) {
+      const s = data.dhcpServer || {};
+      editorArea.innerHTML = `
+        <div class="editor-box">
+          <div class="editor-title">
+            <span>⚙️ DHCP Server Pool & DNS Configuration</span>
+          </div>
+          <div class="editor-grid">
+            <div>
+              <label class="field-label">Start IP Address</label>
+              <input class="field-input" id="pool-start" value="${this._escape(s.ip_start || "192.168.1.100")}" />
+            </div>
+            <div>
+              <label class="field-label">End IP Address</label>
+              <input class="field-input" id="pool-end" value="${this._escape(s.ip_end || "192.168.1.199")}" />
+            </div>
+            <div>
+              <label class="field-label">Lease Time (minutes)</label>
+              <input class="field-input" id="pool-lease" value="${this._escape(s.lease_time || "120")}" />
+            </div>
+            <div>
+              <label class="field-label">Default Gateway</label>
+              <input class="field-input" id="pool-gw" value="${this._escape(s.gateway || data.lanIp || "192.168.1.1")}" />
+            </div>
+            <div>
+              <label class="field-label">Primary DNS</label>
+              <input class="field-input" id="pool-dns1" value="${this._escape(s.pri_dns || "")}" placeholder="1.1.1.1" />
+            </div>
+            <div>
+              <label class="field-label">Secondary DNS</label>
+              <input class="field-input" id="pool-dns2" value="${this._escape(s.snd_dns || "")}" placeholder="8.8.8.8" />
+            </div>
+          </div>
+          <div class="editor-actions">
+            <button class="btn" id="pool-cancel">Cancel</button>
+            <button class="btn primary" id="pool-save">${this._busy ? "Saving..." : "💾 Update DHCP Server"}</button>
+          </div>
+        </div>
+      `;
+      editorArea.querySelector("#pool-cancel")?.addEventListener("click", () => {
+        this._editingPool = false;
+        this._render();
+      });
+      editorArea.querySelector("#pool-save")?.addEventListener("click", () => {
+        this._savePoolSettings({
+          enabled: true,
+          ip_start: editorArea.querySelector("#pool-start").value.trim(),
+          ip_end: editorArea.querySelector("#pool-end").value.trim(),
+          lease_time: editorArea.querySelector("#pool-lease").value.trim(),
+          gateway: editorArea.querySelector("#pool-gw").value.trim(),
+          pri_dns: editorArea.querySelector("#pool-dns1").value.trim(),
+          snd_dns: editorArea.querySelector("#pool-dns2").value.trim(),
+        });
+      });
+      return;
+    }
+
+    editorArea.innerHTML = "";
   }
 
   _render() {
@@ -681,8 +1089,18 @@ class TplinkBe230Card extends HTMLElement {
     this.shadowRoot.getElementById("card-title").textContent =
       this._config.title || `TP-Link ${data.model}`;
 
+    const noticeArea = this.shadowRoot.getElementById("notice-area");
+    if (this._statusMsg) {
+      noticeArea.innerHTML = `<div class="notice ${this._statusMsg.type}"><span>${this._escape(this._statusMsg.text)}</span></div>`;
+    } else {
+      noticeArea.innerHTML = "";
+    }
+
+    this._renderEditor(data);
+
     const activeDevices = data.devices.filter((d) => d.active);
     const activeCount = activeDevices.length;
+    const reservedCount = data.devices.filter((d) => d.is_reserved).length;
     const count5g = activeDevices.filter((d) => this._networkCategory(d) === "5g").length;
     const count2g = activeDevices.filter((d) => this._networkCategory(d) === "2g").length;
     const countWired = activeDevices.filter((d) => this._networkCategory(d) === "wired").length;
@@ -693,7 +1111,7 @@ class TplinkBe230Card extends HTMLElement {
     const bodyEl = this.shadowRoot.getElementById("card-body");
 
     if (this._overview) {
-      subtitleEl.textContent = `${activeCount} active clients · LAN ${data.lanIp}`;
+      subtitleEl.textContent = `${activeCount} active clients · ${reservedCount} static DHCP · LAN ${data.lanIp}`;
       controlsEl.innerHTML = `
         <div class="pill-group">
           <button class="btn active" id="btn-detail" title="Go to Network tab">Details →</button>
@@ -729,8 +1147,8 @@ class TplinkBe230Card extends HTMLElement {
             <div class="kpi-lbl">RAM</div>
           </div>
           <div class="kpi-box">
-            <div class="kpi-val" style="font-size:0.76rem">${data.wanIp}</div>
-            <div class="kpi-lbl">WAN IP</div>
+            <div class="kpi-val" style="color:var(--be-5g)">${reservedCount}</div>
+            <div class="kpi-lbl">Static IPs</div>
           </div>
         </div>
 
@@ -782,7 +1200,7 @@ class TplinkBe230Card extends HTMLElement {
                 <span class="ov-name" title="${this._escape(d.hostname)} (${this._escape(d.network)})">${this._escape(d.hostname)}</span>
               </div>
               <span class="ov-ip" data-copy="${this._escape(d.ip)}" title="Click to copy IP (${this._escape(d.ip)})">
-                ${isCopied ? "Copied!" : shortIp}
+                ${isCopied ? "Copied!" : `${d.is_reserved ? "📌" : ""}${shortIp}`}
               </span>
             </div>
           `;
@@ -803,8 +1221,13 @@ class TplinkBe230Card extends HTMLElement {
       return;
     }
 
-    // Full Detailed Mode
-    subtitleEl.textContent = `${activeCount} connected · 5GHz/MLO: ${count5g} · 2.4GHz: ${count2g} · IoT: ${countGuestIot} · Wired: ${countWired}`;
+    // Full Detailed Mode (Clients View OR DHCP Manager View)
+    subtitleEl.textContent = `${activeCount} connected · ${reservedCount} static DHCP · 5GHz: ${count5g} · 2.4GHz: ${count2g} · IoT: ${countGuestIot} · Wired: ${countWired}`;
+
+    if (this._view === "dhcp") {
+      this._renderDhcpManagerView(data, controlsEl, bodyEl, reservedCount);
+      return;
+    }
 
     const filters = [
       { id: "active", label: `Active (${activeCount})` },
@@ -815,9 +1238,14 @@ class TplinkBe230Card extends HTMLElement {
     if (countGuestIot > 0) {
       filters.push({ id: "guest_iot", label: `Guest/IoT (${countGuestIot})` });
     }
+    filters.push({ id: "reserved", label: `📌 Static (${reservedCount})` });
     filters.push({ id: "all", label: `All (${data.devices.length})` });
 
     controlsEl.innerHTML = `
+      <div class="pill-group">
+        <button class="btn active" id="tab-clients">Clients</button>
+        <button class="btn" id="tab-dhcp">DHCP Manager (${reservedCount})</button>
+      </div>
       <input type="text" class="search-input" id="search-box" placeholder="Search name, IP, MAC..." value="${this._escape(this._search)}" />
       <div class="pill-group" id="filter-group">
         ${filters
@@ -829,6 +1257,11 @@ class TplinkBe230Card extends HTMLElement {
       </div>
       <button class="btn ${this._compact ? "active" : ""}" id="compact-btn" title="Toggle compact view">Compact</button>
     `;
+
+    controlsEl.querySelector("#tab-dhcp")?.addEventListener("click", () => {
+      this._view = "dhcp";
+      this._render();
+    });
 
     const searchBox = controlsEl.querySelector("#search-box");
     searchBox.addEventListener("input", (e) => {
@@ -856,6 +1289,11 @@ class TplinkBe230Card extends HTMLElement {
 
     const cpuTxt = data.cpuUsage !== null ? `<span>CPU: <strong>${data.cpuUsage}%</strong></span>` : "";
     const memTxt = data.memUsage !== null ? `<span>RAM: <strong>${data.memUsage}%</strong></span>` : "";
+    const pool = data.dhcpServer || {};
+    const poolTxt =
+      pool.ip_start && pool.ip_end
+        ? `<span>DHCP Pool: <strong>${pool.ip_start} – ${pool.ip_end}</strong></span>`
+        : "";
 
     const q = this._search.trim().toLowerCase();
     const filtered = data.devices.filter((d) => {
@@ -864,9 +1302,10 @@ class TplinkBe230Card extends HTMLElement {
       if (this._filter === "2g" && (!d.active || this._networkCategory(d) !== "2g")) return false;
       if (this._filter === "wired" && (!d.active || this._networkCategory(d) !== "wired")) return false;
       if (this._filter === "guest_iot" && (!d.active || this._networkCategory(d) !== "guest_iot")) return false;
+      if (this._filter === "reserved" && !d.is_reserved) return false;
 
       if (q) {
-        const hay = `${d.hostname} ${d.ip} ${d.mac} ${d.network}`.toLowerCase();
+        const hay = `${d.hostname} ${d.ip} ${d.mac} ${d.network} ${d.reservation_name || ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -877,6 +1316,7 @@ class TplinkBe230Card extends HTMLElement {
         <div class="summary-metrics">
           <span>LAN: <strong>${data.lanIp}</strong></span>
           <span>WAN: <strong>${data.wanIp}</strong></span>
+          ${poolTxt}
           ${cpuTxt}
           ${memTxt}
         </div>
@@ -909,11 +1349,21 @@ class TplinkBe230Card extends HTMLElement {
               <span class="net-badge cat-${cat}">${this._escape(d.network)}${sigText}</span>
             </div>
             <div class="dev-badges">
-              <span class="mono-pill" data-copy="${this._escape(d.ip)}" title="Click to copy IP">
-                <span class="lbl">IP</span> ${ipCopied ? "Copied!" : this._escape(d.ip)}
-              </span>
-              <span class="mono-pill" data-copy="${this._escape(d.mac)}" title="Click to copy MAC">
-                <span class="lbl">MAC</span> ${macCopied ? "Copied!" : this._escape(d.mac)}
+              <div class="dev-pills-left">
+                <span class="mono-pill" data-copy="${this._escape(d.ip)}" title="Click to copy IP">
+                  <span class="lbl">IP</span> ${ipCopied ? "Copied!" : this._escape(d.ip)}
+                </span>
+                <span class="mono-pill" data-copy="${this._escape(d.mac)}" title="Click to copy MAC">
+                  <span class="lbl">MAC</span> ${macCopied ? "Copied!" : this._escape(d.mac)}
+                </span>
+              </div>
+              <span class="dhcp-tag ${d.is_reserved ? "reserved" : ""}"
+                    data-pin-mac="${this._escape(d.mac)}"
+                    data-pin-ip="${this._escape(d.reserved_ip || d.ip)}"
+                    data-pin-name="${this._escape(d.reservation_name || d.hostname)}"
+                    data-pin-reserved="${d.is_reserved ? "1" : "0"}"
+                    title="${d.is_reserved ? "Static IP Reserved (Click to edit/unpin)" : "Dynamic DHCP (Click to reserve static IP)"}">
+                ${d.is_reserved ? "📌 Static" : "⏱️ Pin IP"}
               </span>
             </div>
           </div>
@@ -931,6 +1381,190 @@ class TplinkBe230Card extends HTMLElement {
     grid.querySelectorAll("[data-copy]").forEach((pill) => {
       pill.addEventListener("click", (e) => {
         this._copyValue(pill.dataset.copy, e);
+      });
+    });
+
+    grid.querySelectorAll("[data-pin-mac]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this._editingReservation = {
+          mac: btn.dataset.pinMac,
+          ip: btn.dataset.pinIp,
+          hostname: btn.dataset.pinName,
+          alreadyReserved: btn.dataset.pinReserved === "1",
+          isNew: false,
+        };
+        this._render();
+      });
+    });
+  }
+
+  _renderDhcpManagerView(data, controlsEl, bodyEl, reservedCount) {
+    const dynamicCount = data.devices.filter((d) => !d.is_reserved).length;
+    const s = data.dhcpServer || {};
+
+    controlsEl.innerHTML = `
+      <div class="pill-group">
+        <button class="btn" id="tab-clients">Clients (${data.devices.length})</button>
+        <button class="btn active" id="tab-dhcp">DHCP Manager (${reservedCount})</button>
+      </div>
+      <input type="text" class="search-input" id="dhcp-search" placeholder="Search IP, MAC, name..." value="${this._escape(this._search)}" />
+      <div class="pill-group">
+        <button class="btn ${this._dhcpFilter === "all" ? "active" : ""}" data-dfilter="all">All (${data.devices.length})</button>
+        <button class="btn ${this._dhcpFilter === "reserved" ? "active" : ""}" data-dfilter="reserved">📌 Reserved (${reservedCount})</button>
+        <button class="btn ${this._dhcpFilter === "dynamic" ? "active" : ""}" data-dfilter="dynamic">⏱️ Dynamic (${dynamicCount})</button>
+      </div>
+      <button class="btn primary" id="btn-new-res">+ Reserve IP</button>
+      <button class="btn" id="btn-edit-pool">⚙️ Pool / DNS</button>
+    `;
+
+    controlsEl.querySelector("#tab-clients")?.addEventListener("click", () => {
+      this._view = "clients";
+      this._render();
+    });
+
+    const searchBox = controlsEl.querySelector("#dhcp-search");
+    searchBox?.addEventListener("input", (e) => {
+      this._search = e.target.value || "";
+      const pos = e.target.selectionStart;
+      this._render();
+      const newBox = this.shadowRoot.getElementById("dhcp-search");
+      if (newBox) {
+        newBox.focus();
+        newBox.setSelectionRange(pos, pos);
+      }
+    });
+
+    controlsEl.querySelectorAll("[data-dfilter]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this._dhcpFilter = btn.dataset.dfilter;
+        this._render();
+      });
+    });
+
+    controlsEl.querySelector("#btn-new-res")?.addEventListener("click", () => {
+      this._editingPool = false;
+      this._editingReservation = {
+        mac: "",
+        ip: "192.168.1.",
+        hostname: "",
+        alreadyReserved: false,
+        isNew: true,
+      };
+      this._render();
+    });
+
+    controlsEl.querySelector("#btn-edit-pool")?.addEventListener("click", () => {
+      this._editingReservation = null;
+      this._editingPool = !this._editingPool;
+      this._render();
+    });
+
+    const q = this._search.trim().toLowerCase();
+    const filtered = data.devices.filter((d) => {
+      if (this._dhcpFilter === "reserved" && !d.is_reserved) return false;
+      if (this._dhcpFilter === "dynamic" && d.is_reserved) return false;
+      if (q) {
+        const hay = `${d.hostname} ${d.ip} ${d.mac} ${d.reservation_name || ""}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+
+    const poolRange = s.ip_start && s.ip_end ? `${s.ip_start} – ${s.ip_end}` : "192.168.1.100 – 192.168.1.199";
+    const dnsText = [s.pri_dns, s.snd_dns].filter(Boolean).join(", ") || "Auto";
+
+    bodyEl.innerHTML = `
+      <div class="summary-bar">
+        <div class="summary-metrics">
+          <span>DHCP Server: <strong style="color:var(--be-online)">${s.enabled !== false ? "Enabled" : "Disabled"}</strong></span>
+          <span>Pool: <strong>${poolRange}</strong></span>
+          <span>Gateway: <strong>${s.gateway || data.lanIp}</strong></span>
+          <span>Lease Time: <strong>${s.lease_time || "120"} min</strong></span>
+          <span>DNS: <strong>${dnsText}</strong></span>
+        </div>
+        <div>
+          <span>Static: <strong>${reservedCount}</strong> · Active Leases: <strong>${data.leasesCount || data.devices.filter((d) => d.active).length}</strong></span>
+        </div>
+      </div>
+      <div class="dhcp-list" id="dhcp-list"></div>
+    `;
+
+    const listEl = bodyEl.querySelector("#dhcp-list");
+    if (filtered.length === 0) {
+      listEl.innerHTML = `<div class="empty-state">No DHCP clients or reservations match your filter.</div>`;
+      return;
+    }
+
+    listEl.innerHTML = filtered
+      .map((d) => {
+        const cat = this._networkCategory(d);
+        const ipCopied = this._copiedText === d.ip;
+        const macCopied = this._copiedText === d.mac;
+        const leaseBadge = d.is_reserved
+          ? `<span class="dhcp-tag reserved">📌 Static Reserved (${this._escape(d.reserved_ip || d.ip)})</span>`
+          : `<span class="dhcp-tag">⏱️ Lease: ${this._escape(d.lease_time || "Dynamic")}</span>`;
+
+        return `
+          <div class="dhcp-row ${d.is_reserved ? "reserved" : "dynamic"}">
+            <div class="dhcp-main">
+              <span class="b-dot cat-${cat}" title="${d.active ? "Online" : "Offline"}"></span>
+              <div>
+                <div class="dev-name">${this._escape(d.reservation_name || d.hostname)}</div>
+                <div class="subtitle">${this._escape(d.network)} · ${d.active ? "Online" : "Offline"}</div>
+              </div>
+            </div>
+            <div class="dhcp-meta">
+              <span class="mono-pill" data-copy="${this._escape(d.ip)}" title="Click to copy IP">
+                <span class="lbl">IP</span> ${ipCopied ? "Copied!" : this._escape(d.ip)}
+              </span>
+              <span class="mono-pill" data-copy="${this._escape(d.mac)}" title="Click to copy MAC">
+                <span class="lbl">MAC</span> ${macCopied ? "Copied!" : this._escape(d.mac)}
+              </span>
+              ${leaseBadge}
+            </div>
+            <div class="dhcp-actions">
+              <button class="btn ${d.is_reserved ? "" : "primary"}"
+                      data-edit-mac="${this._escape(d.mac)}"
+                      data-edit-ip="${this._escape(d.reserved_ip || d.ip)}"
+                      data-edit-name="${this._escape(d.reservation_name || d.hostname)}"
+                      data-edit-res="${d.is_reserved ? "1" : "0"}">
+                ${d.is_reserved ? "✏️ Edit IP" : "📌 Reserve IP"}
+              </button>
+              ${
+                d.is_reserved
+                  ? `<button class="btn danger" data-del-mac="${this._escape(d.mac)}" title="Remove static reservation">🗑️</button>`
+                  : ""
+              }
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+
+    listEl.querySelectorAll("[data-copy]").forEach((pill) => {
+      pill.addEventListener("click", (e) => {
+        this._copyValue(pill.dataset.copy, e);
+      });
+    });
+
+    listEl.querySelectorAll("[data-edit-mac]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this._editingPool = false;
+        this._editingReservation = {
+          mac: btn.dataset.editMac,
+          ip: btn.dataset.editIp,
+          hostname: btn.dataset.editName,
+          alreadyReserved: btn.dataset.editRes === "1",
+          isNew: false,
+        };
+        this._render();
+      });
+    });
+
+    listEl.querySelectorAll("[data-del-mac]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this._deleteReservation(btn.dataset.delMac);
       });
     });
   }
@@ -951,7 +1585,7 @@ if (!customElements.get("tplink-be230-card")) {
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "tplink-be230-card",
-  name: "TP-Link Archer BE230 Devices Card",
-  description: "Displays all devices connected to the TP-Link Archer BE230 (Overview or Detailed mode).",
+  name: "TP-Link Archer BE230 Network & DHCP Manager",
+  description: "Displays connected devices and provides a full DHCP Reservation & Pool Manager for the TP-Link Archer BE230.",
   preview: true,
 });

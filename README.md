@@ -72,13 +72,20 @@ The included [`lovelace/tplink-be230-card.js`](./lovelace/tplink-be230-card.js) 
 
 ### Card Features
 * **Overview Mode (`overview: true`):**
-  * 4 KPI summary boxes (`Connected`, `CPU %`, `RAM %`, `WAN IP`).
+  * 4 KPI summary boxes (`Connected`, `CPU %`, `RAM %`, `Static IPs`).
   * Proportional multi-band distribution bar (`5GHz`, `2.4GHz`, `IoT`, `LAN`) and interactive band filter pills.
-  * 2-column compact client chips with click-to-copy IP and a `Details →` navigation button.
+  * 2-column compact client chips with click-to-copy IP, `📌` indicator for static DHCP reservations, and a `Details →` navigation button.
 * **Detailed Mode (`overview: false`):**
-  * Full device cards showing **Hostname**, **IP** (click to copy), **MAC** (click to copy), and **Connected Network Badge** color-coded by band.
-  * Instant search bar (by name, IP, or MAC), network filter tabs (`Active`, `5GHz`, `2.4GHz`, `LAN`, `Guest/IoT`, `All`), and `Compact` / `Grid` toggle.
-  * Clicking any device card opens Home Assistant's native `more-info` dialog for its `device_tracker` entity.
+  * Full device cards showing **Hostname**, **IP** (click to copy), **MAC** (click to copy), **Connected Network Badge**, and a **1-click `📌 Static` / `⏱️ Pin IP` button** to reserve or edit any device's static IP on the fly.
+  * Instant search bar (by name, IP, or MAC), network filter tabs (`Active`, `5GHz`, `2.4GHz`, `LAN`, `Guest/IoT`, `📌 Static`, `All`), and `Compact` / `Grid` toggle.
+* **Built-In DHCP Manager (`DHCP Manager` header tab or `default_view: "dhcp"`):**
+  * View & edit **DHCP Server Pool & DNS settings** (`Start IP`, `End IP`, `Lease Time`, `Default Gateway`, `Primary & Secondary DNS`) directly from Home Assistant.
+  * Unified table of **Static IP Reservations (`📌`)** and **Active DHCP Leases (`⏱️`)** with remaining lease time.
+  * **1-Click Reserve / Edit / Unreserve:** Lock any dynamic client's current IP or assign a custom IPv4 address and hostname without opening the router's web UI.
+  * Powered by Home Assistant services:
+    * `tplink_be230.add_dhcp_reservation` (`mac`, `ip`, `hostname`, `enable`)
+    * `tplink_be230.delete_dhcp_reservation` (`mac`)
+    * `tplink_be230.set_dhcp_server` (`enabled`, `ip_start`, `ip_end`, `lease_time`, `gateway`, `pri_dns`, `snd_dns`)
 
 ### Card Installation
 1. Copy `lovelace/tplink-be230-card.js` to `/config/www/community/tplink-be230-card/tplink-be230-card.js`.
@@ -123,6 +130,13 @@ cp .env.example .env
 
 # Detailed IPv4 WAN/LAN & DNS configuration
 ./be230.py ipv4
+
+# DHCP Manager: view pool, static reservations & active leases
+./be230.py dhcp status
+
+# DHCP Manager: add/update or delete a static IP reservation
+./be230.py dhcp reserve AA:BB:CC:DD:EE:FF 192.168.1.50 homelab-server
+./be230.py dhcp delete AA:BB:CC:DD:EE:FF
 
 # Toggle Wi-Fi bands (2g, 5g, guest2g, guest5g, iot2g, iot5g)
 ./be230.py wifi guest5g on

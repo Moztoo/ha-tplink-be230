@@ -1,4 +1,4 @@
-"""Sensor platform for TP-Link Archer BE230 router metrics and device summary."""
+"""Sensor platform for TP-Link Archer BE230 router metrics, devices, and DHCP Manager."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -58,15 +58,31 @@ SENSOR_DESCRIPTIONS: tuple[BE230SensorEntityDescription, ...] = (
             "guest_5g_enable": data.get("guest_5g_enable"),
             "iot_2g_enable": data.get("iot_2g_enable"),
             "iot_5g_enable": data.get("iot_5g_enable"),
+            "dhcp_server": data.get("dhcp_server", {}),
+            "dhcp_reservations": data.get("dhcp_reservations", []),
+            "dhcp_leases": data.get("dhcp_leases", []),
             "last_update": data.get("last_update"),
             "devices": data.get("devices", []),
+        },
+    ),
+    BE230SensorEntityDescription(
+        key="dhcp_reservations",
+        name="DHCP Reservations",
+        icon="mdi:ip-outline",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="reservations",
+        value_fn=lambda data: len(data.get("dhcp_reservations", [])),
+        attr_fn=lambda data: {
+            "dhcp_server": data.get("dhcp_server", {}),
+            "reservations": data.get("dhcp_reservations", []),
+            "leases": data.get("dhcp_leases", []),
         },
     ),
     BE230SensorEntityDescription(
         key="wan_ip",
         name="IP WAN",
         icon="mdi:ip-network",
-        value_fn=lambda data: data.get("wan_ip") or "Sin conexión",
+        value_fn=lambda data: data.get("wan_ip") or "Offline",
     ),
     BE230SensorEntityDescription(
         key="lan_ip",

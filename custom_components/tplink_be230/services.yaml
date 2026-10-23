@@ -1,0 +1,85 @@
+add_dhcp_reservation:
+  name: Add or Update DHCP Address Reservation
+  description: Adds or updates a static IPv4 DHCP address reservation on the TP-Link Archer BE230 router.
+  fields:
+    mac:
+      name: MAC Address
+      description: Device MAC address (e.g. AA:BB:CC:DD:EE:FF).
+      required: true
+      example: "AA:BB:CC:DD:EE:FF"
+      selector:
+        text:
+    ip:
+      name: IPv4 Address
+      description: Static IPv4 address to reserve (e.g. 192.168.1.50).
+      required: true
+      example: "192.168.1.50"
+      selector:
+        text:
+    hostname:
+      name: Description / Hostname
+      description: Friendly name or description stored in the router reservation table.
+      required: false
+      example: "homelab-server"
+      selector:
+        text:
+    enable:
+      name: Enabled
+      description: Whether this static reservation is enabled.
+      required: false
+      default: true
+      selector:
+        boolean:
+
+delete_dhcp_reservation:
+  name: Delete DHCP Address Reservation
+  description: Removes a static IPv4 DHCP address reservation from the TP-Link Archer BE230 router by MAC address.
+  fields:
+    mac:
+      name: MAC Address
+      description: Device MAC address to unreserve.
+      required: true
+      example: "AA:BB:CC:DD:EE:FF"
+      selector:
+        text:
+
+set_dhcp_server:
+  name: Update DHCP Server Settings
+  description: Updates the DHCPv4 server pool, lease time, gateway, and DNS servers on the TP-Link Archer BE230.
+  fields:
+    enabled:
+      name: Enable DHCP Server
+      required: false
+      default: true
+      selector:
+        boolean:
+    ip_start:
+      name: Pool Start IP
+      example: "192.168.1.100"
+      selector:
+        text:
+    ip_end:
+      name: Pool End IP
+      example: "192.168.1.249"
+      selector:
+        text:
+    lease_time:
+      name: Address Lease Time (minutes)
+      example: "120"
+      selector:
+        text:
+    gateway:
+      name: Default Gateway
+      example: "192.168.1.1"
+      selector:
+        text:
+    pri_dns:
+      name: Primary DNS
+      example: "1.1.1.1"
+      selector:
+        text:
+    snd_dns:
+      name: Secondary DNS
+      example: "8.8.8.8"
+      selector:
+        text:
