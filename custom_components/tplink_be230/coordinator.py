@@ -433,6 +433,43 @@ class TplinkBE230Coordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.known_devices[rmac]["reservation_name"] = rinfo["hostname"]
                 self.known_devices[rmac]["reservation_enabled"] = rinfo["enabled"]
 
+        # Also ensure any device with an active DHCP lease appears in known_devices
+        for lmac, linfo in leases_by_mac.items():
+            if lmac not in self.known_devices:
+                res_info = reservations_by_mac.get(lmac)
+                self.known_devices[lmac] = {
+                    "mac": lmac,
+                    "ip": linfo["ip"],
+                    "hostname": res_info["hostname"] if res_info else linfo["hostname"],
+                    "network": "DHCP Lease",
+                    "network_type": "unknown",
+                    "band": "LAN/Wi-Fi",
+                    "is_wired": False,
+                    "is_guest": False,
+                    "is_iot": False,
+                    "active": False,
+                    "is_reserved": res_info is not None,
+                    "reserved_ip": res_info["ip"] if res_info else None,
+                    "reservation_name": res_info["hostname"] if res_info else None,
+                    "reservation_enabled": res_info["enabled"] if res_info else None,
+                    "lease_time": linfo["lease_time"],
+                    "signal": None,
+                    "down_speed": None,
+                    "up_speed": None,
+                    "tx_rate": None,
+                    "rx_rate": None,
+                    "packets_sent": None,
+                    "packets_received": None,
+                    "online_time": None,
+                    "traffic_usage": None,
+                    "ssid": None,
+                    "last_seen": None,
+                }
+                if lmac not in self.registered_macs:
+                    new_macs.append(lmac)
+            else:
+                self.known_devices[lmac]["lease_time"] = linfo["lease_time"]
+
         if new_macs:
             async_dispatcher_send(
                 self.hass,
