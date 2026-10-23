@@ -742,16 +742,17 @@ class TplinkBe230Card extends HTMLElement {
         }
         .devices-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(275px, 1fr));
+          grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 9px;
-          max-height: 168px;
-          overflow-y: auto;
-          padding-right: 4px;
+        }
+        @media (max-width: 520px) {
+          .devices-grid {
+            grid-template-columns: 1fr;
+          }
         }
         ha-card.compact .devices-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(275px, 1fr));
-          max-height: 110px;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 6px;
         }
         .device-card {
