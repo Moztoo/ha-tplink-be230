@@ -1,30 +1,30 @@
-# ha-tplink-be230 — TP-Link Archer BE230 Home Assistant Integration, Lovelace Card & CLI
+# ha-tplink-be230
 
-Repositorio completo para integrar y administrar el router **TP-Link Archer BE230** (`192.168.1.1`) en **Home Assistant** y desde la terminal mediante [`tplinkrouterc6u`](https://pypi.org/project/tplinkrouterc6u/).
+Complete **Home Assistant Custom Integration**, **Lovelace Web Component Card**, and **Python CLI** for the **TP-Link Archer BE230** Wi-Fi 7 router, powered by [`tplinkrouterc6u`](https://pypi.org/project/tplinkrouterc6u/).
 
 ---
 
-## Estructura del Repositorio
+## Repository Structure
 
 ```text
 ha-tplink-be230/
 ├── custom_components/
-│   └── tplink_be230/              # Integración Custom para Home Assistant
+│   └── tplink_be230/              # Home Assistant Custom Integration
 │       ├── __init__.py
 │       ├── manifest.json
 │       ├── const.py
-│       ├── config_flow.py         # Configuración UI y cambio de contraseña
-│       ├── coordinator.py         # Polling local y registro dinámico de dispositivos
-│       ├── device_tracker.py      # Crea una entidad por cada dispositivo conectado
-│       ├── sensor.py              # Sensores de estado del router + lista de clientes
-│       ├── button.py              # Botón para reiniciar el router
+│       ├── config_flow.py         # UI Setup, OptionsFlow & Reauth Flow
+│       ├── coordinator.py         # Local polling & dynamic client discovery
+│       ├── device_tracker.py      # Creates an enabled entity per connected client
+│       ├── sensor.py              # Router telemetry & client summary sensors
+│       ├── button.py              # Router reboot button entity
 │       ├── strings.json
 │       └── translations/
-│           ├── es.json
-│           └── en.json
+│           ├── en.json
+│           └── es.json
 ├── lovelace/
-│   └── tplink-be230-card.js       # Widget Lovelace (custom:tplink-be230-card)
-├── be230.py                       # Herramienta CLI para terminal
+│   └── tplink-be230-card.js       # Lovelace Custom Card (custom:tplink-be230-card)
+├── be230.py                       # Terminal CLI administration tool
 ├── requirements.txt
 ├── .env.example
 ├── hacs.json
@@ -33,72 +33,68 @@ ha-tplink-be230/
 
 ---
 
-## 1. Integración de Home Assistant (`tplink_be230`)
+## 1. Home Assistant Integration (`tplink_be230`)
 
-### Características
-* **Configuración 100% desde la interfaz de Home Assistant (Config Flow):**
-  Permite configurar el **Host/IP** (`http://192.168.1.1`), la **contraseña local del router** y el **intervalo de escaneo** directamente desde la interfaz gráfica.
-* **Cambio de contraseña en cualquier momento (Options Flow & Reauth):**
-  Desde *Ajustes → Dispositivos y servicios → TP-Link Archer BE230 → Configurar*, puedes cambiar la contraseña que usa Home Assistant sin editar archivos YAML.
-* **Creación automática de identidades (`device_tracker`):**
-  Cada dispositivo conectado al router se registra automáticamente como una entidad `device_tracker.<nombre_o_mac>` con estado `home` / `not_home` y los siguientes atributos:
-  * `ip`: Dirección IPv4 (`192.168.1.x`)
-  * `mac`: Dirección MAC (`AA:BB:CC:DD:EE:FF`)
-  * `hostname`: Nombre del equipo
-  * `network`: Red a la que está conectado (`Wi-Fi 5GHz`, `Wi-Fi 2.4GHz`, `Wi-Fi 7 MLO`, `Ethernet (LAN)`, `Guest 5GHz`, `Guest 2.4GHz`, `IoT 2.4GHz`, `IoT 5GHz`)
-  * `network_type`: Código interno (`host_5g`, `host_2g`, `host_mlo`, `wired`, `guest_5g`, `iot_2g`, etc.)
-  * `band`: Banda (`5GHz`, `2.4GHz`, `6GHz`, `MLO`, `LAN`)
+### Features
+* **100% UI Configuration (Config Flow & Options Flow):**
+  Configure the **Router Host/IP** (`http://192.168.1.1`), **Local Admin Password**, and **Polling Interval** directly from the Home Assistant UI. Update your password anytime from *Settings → Devices & Services → TP-Link Archer BE230 → Configure*.
+* **Automatic Client Identity Creation (`device_tracker`):**
+  Every connected client is automatically discovered and enabled by default as a `device_tracker.<hostname_or_mac>` entity (`home` / `not_home`) with rich state attributes:
+  * `ip`: IPv4 address (`192.168.1.x`)
+  * `mac`: Normalized MAC address (`AA:BB:CC:DD:EE:FF`)
+  * `hostname`: Device hostname
+  * `network`: Connected network label (`Wi-Fi 5GHz`, `Wi-Fi 2.4GHz`, `Wi-Fi 7 MLO`, `Ethernet (LAN)`, `Guest 5GHz`, `Guest 2.4GHz`, `IoT 2.4GHz`, `IoT 5GHz`)
+  * `network_type`: Raw network identifier (`host_5g`, `host_2g`, `host_mlo`, `wired`, `guest_5g`, `iot_2g`, etc.)
+  * `band`: Frequency band (`5GHz`, `2.4GHz`, `6GHz`, `MLO`, `LAN`)
   * `signal`, `packets_sent`, `packets_received`, `down_speed`, `up_speed`, `last_seen`
-* **Sensores y controles del Router:**
-  * `sensor.tp_link_archer_be230_dispositivos_conectados` (con el listado completo en sus atributos)
-  * `sensor.tp_link_archer_be230_ip_wan`
-  * `sensor.tp_link_archer_be230_ip_lan`
-  * `sensor.tp_link_archer_be230_uso_de_cpu`
-  * `sensor.tp_link_archer_be230_uso_de_memoria`
-  * `sensor.tp_link_archer_be230_clientes_wi_fi`
-  * `sensor.tp_link_archer_be230_clientes_por_cable`
-  * `button.tp_link_archer_be230_reiniciar_router`
+* **Router Telemetry Sensors & Controls:**
+  * Connected Devices count & full device list attribute
+  * WAN IPv4 & LAN IPv4 sensors
+  * CPU Usage (`%`) & Memory Usage (`%`) sensors
+  * Wi-Fi Clients & Wired Clients count sensors
+  * Router Reboot button entity
 
-### Instalación de la Integración en Home Assistant
+### Installation
 
-1. Copia la carpeta `custom_components/tplink_be230` dentro del directorio `/config/custom_components/` de tu Home Assistant:
+1. Copy `custom_components/tplink_be230` to your Home Assistant `/config/custom_components/` directory:
    ```bash
    cp -r custom_components/tplink_be230 /config/custom_components/
    ```
-2. Reinicia Home Assistant.
-3. Ve a **Ajustes → Dispositivos y servicios → Añadir integración** y busca **TP-Link Archer BE230**.
-4. Ingresa:
-   * **Host / IP:** `http://192.168.1.1`
-   * **Contraseña local del Router:** *(tu contraseña de administración del BE230)*
-   * **Intervalo de actualización:** `30` (segundos)
+2. Restart Home Assistant.
+3. Navigate to **Settings → Devices & Services → Add Integration** and search for **TP-Link Archer BE230**.
+4. Enter your router IP (`http://192.168.1.1`), local admin password, and desired scan interval (`30` seconds).
 
 ---
 
-## 2. Widget Lovelace (`custom:tplink-be230-card`)
+## 2. Lovelace Custom Card (`custom:tplink-be230-card`)
 
-El archivo [`lovelace/tplink-be230-card.js`](./lovelace/tplink-be230-card.js) es un Web Component adaptable al tema de Home Assistant que descubre automáticamente las entidades creadas por la integración y muestra todos los dispositivos conectados.
+The included [`lovelace/tplink-be230-card.js`](./lovelace/tplink-be230-card.js) is a theme-aware Web Component that automatically discovers all `device_tracker` entities created by the integration. It supports both a compact **Front-Page Overview mode (`overview: true`)** and a **Full Detailed mode (`overview: false`)**.
 
-### Funciones del Widget
-* Muestra cada dispositivo con su **Nombre**, **IP** (clic para copiar), **MAC** (clic para copiar) y **Red conectada** (`Wi-Fi 5GHz`, `Wi-Fi 2.4GHz`, `Wi-Fi 7 MLO`, `Ethernet (LAN)`, `Guest`, `IoT`) diferenciada por colores.
-* Al hacer clic sobre cualquier tarjeta de dispositivo, abre el diálogo de detalle (`more-info`) de su entidad `device_tracker` en Home Assistant.
-* Barra superior de métricas del router (`IP LAN`, `IP WAN`, `% CPU`, `% RAM`, versión de firmware).
-* Filtros rápidos por banda/red (`Activos`, `5GHz`, `2.4GHz`, `LAN`, `Guest/IoT`, `Todos`), buscador instantáneo por nombre/IP/MAC y modo `Compact` / `Grid`.
+### Card Features
+* **Overview Mode (`overview: true`):**
+  * 4 KPI summary boxes (`Connected`, `CPU %`, `RAM %`, `WAN IP`).
+  * Proportional multi-band distribution bar (`5GHz`, `2.4GHz`, `IoT`, `LAN`) and interactive band filter pills.
+  * 2-column compact client chips with click-to-copy IP and a `Details →` navigation button.
+* **Detailed Mode (`overview: false`):**
+  * Full device cards showing **Hostname**, **IP** (click to copy), **MAC** (click to copy), and **Connected Network Badge** color-coded by band.
+  * Instant search bar (by name, IP, or MAC), network filter tabs (`Active`, `5GHz`, `2.4GHz`, `LAN`, `Guest/IoT`, `All`), and `Compact` / `Grid` toggle.
+  * Clicking any device card opens Home Assistant's native `more-info` dialog for its `device_tracker` entity.
 
-### Instalación del Widget
-1. Copia `lovelace/tplink-be230-card.js` a `/config/www/tplink-be230-card.js` en tu Home Assistant.
-2. En **Ajustes → Paneles de control → Recursos**, añade:
-   * **URL:** `/local/tplink-be230-card.js?v=1`
-   * **Tipo de recurso:** Módulo JavaScript
-3. Añade la tarjeta en tu dashboard:
+### Card Installation
+1. Copy `lovelace/tplink-be230-card.js` to `/config/www/community/tplink-be230-card/tplink-be230-card.js`.
+2. In **Settings → Dashboards → Resources**, add:
+   * **URL:** `/local/community/tplink-be230-card/tplink-be230-card.js?v=1.1.1`
+   * **Resource type:** `JavaScript Module`
+3. Add the card to your dashboard:
 
 ```yaml
-# Versión Overview pequeña (para pestaña principal / Front)
+# Compact Overview Mode (for main/overview dashboard tab)
 type: custom:tplink-be230-card
 title: Archer BE230 Overview
 overview: true
-detail_path: /dashboard-testdashboard/network
+detail_path: /lovelace/network
 
-# Versión Detallada completa (para pestaña Network)
+# Full Detailed Mode (for dedicated Network tab)
 type: custom:tplink-be230-card
 title: TP-Link Archer BE230
 overview: false
@@ -108,29 +104,29 @@ show_offline: false
 
 ---
 
-## 3. CLI para Terminal (`be230.py`)
+## 3. Terminal CLI (`be230.py`)
 
-Puedes consultar o administrar el router directamente desde tu terminal en Linux:
+Manage and inspect the router directly from a Linux terminal:
 
 ```bash
 cp .env.example .env
-# Edita .env con tu contraseña local del router (TPLINK_PASSWORD=...)
+# Edit .env with your local router password (TPLINK_PASSWORD=...)
 
-# Ver estado completo (firmware, WAN/LAN, CPU/RAM y clientes conectados)
+# Full status & connected devices
 ./be230.py
 
-# Solo estado general
+# Router status only
 ./be230.py status
 
-# Solo dispositivos conectados
+# Connected client table only
 ./be230.py devices
 
-# Estado detallado IPv4 (DNS, máscara, gateway)
+# Detailed IPv4 WAN/LAN & DNS configuration
 ./be230.py ipv4
 
-# Encender/apagar Wi-Fi (2g, 5g, guest2g, guest5g, iot2g, iot5g)
+# Toggle Wi-Fi bands (2g, 5g, guest2g, guest5g, iot2g, iot5g)
 ./be230.py wifi guest5g on
 
-# Reiniciar el router
+# Reboot the router
 ./be230.py reboot
 ```
