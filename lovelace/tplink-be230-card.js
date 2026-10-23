@@ -742,22 +742,29 @@ class TplinkBe230Card extends HTMLElement {
         }
         .devices-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(265px, 1fr));
+          grid-template-columns: repeat(auto-fill, minmax(275px, 1fr));
           gap: 9px;
+          max-height: 168px;
+          overflow-y: auto;
+          padding-right: 4px;
         }
         ha-card.compact .devices-grid {
-          display: flex;
-          flex-direction: column;
-          gap: 5px;
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(275px, 1fr));
+          max-height: 110px;
+          gap: 6px;
         }
         .device-card {
           background: var(--be-surface);
           border: 1px solid var(--be-divider);
           border-radius: 10px;
-          padding: 10px 12px;
+          padding: 9px 11px;
           display: flex;
           flex-direction: column;
-          gap: 8px;
+          justify-content: space-between;
+          gap: 7px;
+          height: 74px;
+          box-sizing: border-box;
           cursor: pointer;
           transition: border-color 0.15s ease;
         }
@@ -776,6 +783,7 @@ class TplinkBe230Card extends HTMLElement {
           flex-direction: row;
           align-items: center;
           justify-content: space-between;
+          height: 46px;
           padding: 6px 10px;
           border-radius: 8px;
         }
@@ -783,19 +791,21 @@ class TplinkBe230Card extends HTMLElement {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          gap: 8px;
+          gap: 6px;
           min-width: 0;
+          flex-wrap: nowrap;
         }
         .dev-id {
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 7px;
           min-width: 0;
+          flex: 1;
         }
         .dev-icon {
-          width: 28px;
-          height: 28px;
-          border-radius: 7px;
+          width: 24px;
+          height: 24px;
+          border-radius: 6px;
           background: var(--be-input);
           display: flex;
           align-items: center;
@@ -804,19 +814,19 @@ class TplinkBe230Card extends HTMLElement {
           flex-shrink: 0;
         }
         .dev-icon ha-icon {
-          --mdc-icon-size: 16px;
+          --mdc-icon-size: 15px;
         }
         .dev-name {
-          font-size: 0.82rem;
+          font-size: 0.8rem;
           font-weight: 600;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
         }
         .net-badge {
-          font-size: 0.65rem;
+          font-size: 0.63rem;
           font-weight: 700;
-          padding: 2px 7px;
+          padding: 2px 6px;
           border-radius: 999px;
           white-space: nowrap;
           flex-shrink: 0;
@@ -846,27 +856,32 @@ class TplinkBe230Card extends HTMLElement {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          gap: 6px;
-          flex-wrap: wrap;
+          gap: 5px;
+          flex-wrap: nowrap;
+          min-width: 0;
         }
         .dev-pills-left {
           display: flex;
           align-items: center;
-          gap: 5px;
-          flex-wrap: wrap;
+          gap: 4px;
+          flex-wrap: nowrap;
+          min-width: 0;
+          overflow: hidden;
         }
         .mono-pill {
           font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-          font-size: 0.68rem;
-          padding: 2px 6px;
-          border-radius: 6px;
+          font-size: 0.65rem;
+          padding: 2px 5px;
+          border-radius: 5px;
           background: var(--be-input);
           border: 1px solid var(--be-divider);
           color: var(--be-text-primary);
           cursor: pointer;
           display: inline-flex;
           align-items: center;
-          gap: 4px;
+          gap: 3px;
+          white-space: nowrap;
+          flex-shrink: 0;
           transition: border-color 0.15s ease;
         }
         .mono-pill:hover {
@@ -874,15 +889,17 @@ class TplinkBe230Card extends HTMLElement {
         }
         .mono-pill .lbl {
           color: var(--be-text-secondary);
-          font-size: 0.61rem;
+          font-size: 0.59rem;
           font-weight: 600;
         }
         .dhcp-tag {
-          font-size: 0.63rem;
+          font-size: 0.62rem;
           font-weight: 700;
           padding: 2px 6px;
           border-radius: 5px;
           cursor: pointer;
+          white-space: nowrap;
+          flex-shrink: 0;
           border: 1px solid var(--be-divider);
           background: var(--be-input);
           color: var(--be-text-secondary);
@@ -1487,7 +1504,7 @@ class TplinkBe230Card extends HTMLElement {
           <span>Static: <strong>${reservedCount}</strong> · Active Leases: <strong>${data.leasesCount || data.devices.filter((d) => d.active).length}</strong></span>
         </div>
       </div>
-      <div class="dhcp-list" id="dhcp-list"></div>
+      <div class="devices-grid" id="dhcp-list"></div>
     `;
 
     const listEl = bodyEl.querySelector("#dhcp-list");
@@ -1499,42 +1516,42 @@ class TplinkBe230Card extends HTMLElement {
     listEl.innerHTML = filtered
       .map((d) => {
         const cat = this._networkCategory(d);
+        const icon = this._iconForDevice(d);
         const ipCopied = this._copiedText === d.ip;
         const macCopied = this._copiedText === d.mac;
-        const leaseBadge = d.is_reserved
-          ? `<span class="dhcp-tag reserved">📌 Static Reserved (${this._escape(d.reserved_ip || d.ip)})</span>`
-          : `<span class="dhcp-tag">⏱️ Lease: ${this._escape(d.lease_time || "Dynamic")}</span>`;
+        const leaseLabel = d.is_reserved
+          ? `📌 Static`
+          : `⏱️ ${this._escape(d.lease_time || "Dynamic")}`;
 
         return `
-          <div class="dhcp-row ${d.is_reserved ? "reserved" : "dynamic"}">
-            <div class="dhcp-main">
-              <span class="b-dot cat-${cat}" title="${d.active ? "Online" : "Offline"}"></span>
-              <div>
-                <div class="dev-name">${this._escape(d.reservation_name || d.hostname)}</div>
-                <div class="subtitle">${this._escape(d.network)} · ${d.active ? "Online" : "Offline"}</div>
+          <div class="device-card cat-${cat} ${d.active ? "online" : "offline"}">
+            <div class="dev-top">
+              <div class="dev-id">
+                <div class="dev-icon"><ha-icon icon="${icon}"></ha-icon></div>
+                <div class="dev-name" title="${this._escape(d.reservation_name || d.hostname)}">${this._escape(d.reservation_name || d.hostname)}</div>
               </div>
-            </div>
-            <div class="dhcp-meta">
-              <span class="mono-pill" data-copy="${this._escape(d.ip)}" title="Click to copy IP">
-                <span class="lbl">IP</span> ${ipCopied ? "Copied!" : this._escape(d.ip)}
+              <span class="dhcp-tag ${d.is_reserved ? "reserved" : ""}"
+                    data-edit-mac="${this._escape(d.mac)}"
+                    data-edit-ip="${this._escape(d.reserved_ip || d.ip)}"
+                    data-edit-name="${this._escape(d.reservation_name || d.hostname)}"
+                    data-edit-res="${d.is_reserved ? "1" : "0"}"
+                    title="Click to edit or reserve static IP">
+                ${leaseLabel} ✏️
               </span>
-              <span class="mono-pill" data-copy="${this._escape(d.mac)}" title="Click to copy MAC">
-                <span class="lbl">MAC</span> ${macCopied ? "Copied!" : this._escape(d.mac)}
-              </span>
-              ${leaseBadge}
             </div>
-            <div class="dhcp-actions">
-              <button class="btn ${d.is_reserved ? "" : "primary"}"
-                      data-edit-mac="${this._escape(d.mac)}"
-                      data-edit-ip="${this._escape(d.reserved_ip || d.ip)}"
-                      data-edit-name="${this._escape(d.reservation_name || d.hostname)}"
-                      data-edit-res="${d.is_reserved ? "1" : "0"}">
-                ${d.is_reserved ? "✏️ Edit IP" : "📌 Reserve IP"}
-              </button>
+            <div class="dev-badges">
+              <div class="dev-pills-left">
+                <span class="mono-pill" data-copy="${this._escape(d.ip)}" title="Click to copy IP">
+                  <span class="lbl">IP</span> ${ipCopied ? "Copied!" : this._escape(d.ip)}
+                </span>
+                <span class="mono-pill" data-copy="${this._escape(d.mac)}" title="Click to copy MAC">
+                  <span class="lbl">MAC</span> ${macCopied ? "Copied!" : this._escape(d.mac)}
+                </span>
+              </div>
               ${
                 d.is_reserved
-                  ? `<button class="btn danger" data-del-mac="${this._escape(d.mac)}" title="Remove static reservation">🗑️</button>`
-                  : ""
+                  ? `<span class="dhcp-tag" style="color:var(--be-danger);border-color:color-mix(in srgb, var(--be-danger) 40%, transparent)" data-del-mac="${this._escape(d.mac)}" title="Remove static reservation">🗑️</span>`
+                  : `<span class="net-badge cat-${cat}">${this._escape(d.band)}</span>`
               }
             </div>
           </div>
