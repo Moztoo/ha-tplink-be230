@@ -994,14 +994,12 @@ class TplinkBe230Card extends HTMLElement {
         .flow-diagram-wrap {
           position: relative;
           width: 100%;
-          aspect-ratio: 560 / 310;
-          max-height: 325px;
-          margin: 4px auto 10px auto;
+          height: 340px;
+          margin: 8px auto 14px auto;
           user-select: none;
         }
         ha-card.compact .flow-diagram-wrap {
-          aspect-ratio: 560 / 245;
-          max-height: 245px;
+          height: 325px;
         }
         svg.flow-svg {
           position: absolute;
@@ -1027,26 +1025,32 @@ class TplinkBe230Card extends HTMLElement {
           display: flex;
           flex-direction: column;
           align-items: center;
+          justify-content: center;
           cursor: pointer;
           z-index: 2;
         }
         .flow-node-label {
-          font-size: 0.68rem;
+          position: absolute;
+          bottom: calc(100% + 3px);
+          left: 50%;
+          transform: translateX(-50%);
+          font-size: 0.62rem;
           font-weight: 600;
           color: var(--be-text-secondary);
-          margin-bottom: 3px;
+          line-height: 1.1;
           white-space: nowrap;
           max-width: 96px;
           overflow: hidden;
           text-overflow: ellipsis;
+          pointer-events: none;
         }
         .flow-node-label.bottom {
-          margin-bottom: 0;
-          margin-top: 3px;
+          bottom: auto;
+          top: calc(100% + 3px);
         }
         .flow-circle {
-          width: 64px;
-          height: 64px;
+          width: 54px;
+          height: 54px;
           border-radius: 50%;
           background: var(--be-bg);
           border: 2px solid var(--node-color, var(--be-divider));
@@ -1054,7 +1058,7 @@ class TplinkBe230Card extends HTMLElement {
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          gap: 1px;
+          gap: 0px;
           transition: transform 0.16s ease, box-shadow 0.2s ease, border-color 0.2s ease;
           box-sizing: border-box;
         }
@@ -1066,22 +1070,22 @@ class TplinkBe230Card extends HTMLElement {
           box-shadow: 0 0 0 3px color-mix(in srgb, var(--node-color, var(--be-accent)) 32%, transparent);
         }
         .flow-circle.lg {
-          width: 76px;
-          height: 76px;
+          width: 68px;
+          height: 68px;
           border-width: 2.5px;
         }
         .flow-circle.sm {
-          width: 54px;
-          height: 54px;
+          width: 50px;
+          height: 50px;
           border-width: 1.8px;
         }
         ha-card.compact .flow-circle {
-          width: 54px;
-          height: 54px;
+          width: 50px;
+          height: 50px;
         }
         ha-card.compact .flow-circle.lg {
-          width: 64px;
-          height: 64px;
+          width: 62px;
+          height: 62px;
         }
         ha-card.compact .flow-circle.sm {
           width: 46px;
@@ -1092,30 +1096,27 @@ class TplinkBe230Card extends HTMLElement {
           border-style: dashed;
         }
         .flow-circle ha-icon {
-          --mdc-icon-size: 18px;
+          --mdc-icon-size: 15px;
           color: var(--node-color, var(--be-text-primary));
         }
         .flow-circle.lg ha-icon {
-          --mdc-icon-size: 22px;
+          --mdc-icon-size: 20px;
         }
         .flow-circle.sm ha-icon {
-          --mdc-icon-size: 15px;
+          --mdc-icon-size: 14px;
         }
         .flow-val {
-          font-size: 0.68rem;
+          font-size: 0.63rem;
           font-weight: 700;
           color: var(--be-text-primary);
           line-height: 1.05;
           white-space: nowrap;
         }
         .flow-sub {
-          font-size: 0.58rem;
+          font-size: 0.54rem;
           color: var(--be-text-secondary);
           line-height: 1;
           white-space: nowrap;
-        }
-        ha-card.compact .flow-sub {
-          display: none;
         }
 
         /* Proportional Breakdown Bar */
@@ -2070,10 +2071,10 @@ class TplinkBe230Card extends HTMLElement {
 
     // Aggregate per band ("5g", "2g", "wired", "guest_iot")
     const bandDefs = [
-      { id: "5g", label: "5GHz / MLO", icon: "mdi:wifi-star", color: "var(--be-5g)", y: 55 },
-      { id: "2g", label: "2.4GHz", icon: "mdi:wifi", color: "var(--be-2g)", y: 128 },
-      { id: "wired", label: "Ethernet LAN", icon: "mdi:lan-connect", color: "var(--be-lan)", y: 201 },
-      { id: "guest_iot", label: "IoT / Guest", icon: "mdi:access-point-network", color: "var(--be-guest)", y: 268 },
+      { id: "5g", label: "5GHz / MLO", icon: "mdi:wifi-star", color: "var(--be-5g)", y: 38 },
+      { id: "2g", label: "2.4GHz", icon: "mdi:wifi", color: "var(--be-2g)", y: 120 },
+      { id: "wired", label: "Ethernet LAN", icon: "mdi:lan-connect", color: "var(--be-lan)", y: 202 },
+      { id: "guest_iot", label: "IoT / Guest", icon: "mdi:access-point-network", color: "var(--be-guest)", y: 284 },
     ];
 
     const bands = bandDefs.map((b) => {
@@ -2118,7 +2119,7 @@ class TplinkBe230Card extends HTMLElement {
     // Top 4 active devices for the right-hand side of the flow topology
     const sortedDevices = [...enriched].sort((a, b) => metricScore(b) - metricScore(a));
     const top4 = sortedDevices.slice(0, 4);
-    const top4Y = [52, 124, 198, 268];
+    const top4Y = [38, 120, 202, 284];
     const maxTopVal = Math.max(
       1,
       ...top4.map((d) =>
@@ -2130,7 +2131,7 @@ class TplinkBe230Card extends HTMLElement {
       )
     );
 
-    const bandYMap = { "5g": 55, "2g": 128, wired: 201, guest_iot: 268 };
+    const bandYMap = { "5g": 38, "2g": 120, wired: 202, guest_iot: 284 };
     const bandColorMap = {
       "5g": "var(--be-5g)",
       "2g": "var(--be-2g)",
@@ -2139,22 +2140,22 @@ class TplinkBe230Card extends HTMLElement {
     };
 
     // Build SVG paths & animated particles
-    // Coordinates in viewBox="0 0 560 310":
-    // WAN node: (58, 160) -> Router Hub: (185, 160) -> Band nodes: (342, b.y) -> Top 4 Device nodes: (498, top4Y[i])
+    // Coordinates in viewBox="0 0 560 340":
+    // WAN node: (58, 161) -> Router Hub: (185, 161) -> Band nodes: (342, b.y) -> Top 4 Device nodes: (498, top4Y[i])
     const wanActive = activeDevices.length > 0;
     const wanDur = this._flowDuration(maxBandVal, maxBandVal);
 
     const svgPaths = [];
     // 1. WAN -> BE230 Hub
     svgPaths.push(`
-      <path class="flow-path ${wanActive ? "" : "inactive"}" style="stroke: var(--be-accent);" d="M 58 160 L 185 160" />
+      <path class="flow-path ${wanActive ? "" : "inactive"}" style="stroke: var(--be-accent);" d="M 58 161 L 185 161" />
       ${
         wanActive
           ? `<circle class="flow-dot" r="3.6" style="fill: var(--be-accent);">
-               <animateMotion dur="${wanDur}s" repeatCount="indefinite" path="M 58 160 L 185 160" />
+               <animateMotion dur="${wanDur}s" repeatCount="indefinite" path="M 58 161 L 185 161" />
              </circle>
              <circle class="flow-dot" r="2.6" style="fill: var(--be-online); opacity: 0.85;">
-               <animateMotion dur="${(Number(wanDur) * 1.25).toFixed(2)}s" repeatCount="indefinite" path="M 185 160 L 58 160" />
+               <animateMotion dur="${(Number(wanDur) * 1.25).toFixed(2)}s" repeatCount="indefinite" path="M 185 161 L 58 161" />
              </circle>`
           : ""
       }
@@ -2162,8 +2163,8 @@ class TplinkBe230Card extends HTMLElement {
 
     // 2. BE230 Hub -> Band Nodes
     for (const b of bands) {
-      const pathD = `M 185 160 C 255 160, 275 ${b.y}, 342 ${b.y}`;
-      const revPathD = `M 342 ${b.y} C 275 ${b.y}, 255 160, 185 160`;
+      const pathD = `M 185 161 C 255 161, 275 ${b.y}, 342 ${b.y}`;
+      const revPathD = `M 342 ${b.y} C 275 ${b.y}, 255 161, 185 161`;
       const isAct = b.count > 0;
       const dur = this._flowDuration(b.val, maxBandVal);
       svgPaths.push(`
@@ -2183,7 +2184,7 @@ class TplinkBe230Card extends HTMLElement {
 
     // 3. Band Nodes -> Top 4 Active Client Nodes
     top4.forEach((d, idx) => {
-      const sy = bandYMap[d.cat] || 128;
+      const sy = bandYMap[d.cat] || 120;
       const ty = top4Y[idx];
       const col = bandColorMap[d.cat] || "var(--be-5g)";
       const pathD = `M 342 ${sy} C 415 ${sy}, 430 ${ty}, 498 ${ty}`;
@@ -2219,7 +2220,7 @@ class TplinkBe230Card extends HTMLElement {
     const bandNodesHtml = bands
       .map((b) => {
         const leftPct = ((342 / 560) * 100).toFixed(1);
-        const topPct = ((b.y / 310) * 100).toFixed(1);
+        const topPct = ((b.y / 340) * 100).toFixed(1);
         const isSel = this._flowBandFilter === b.id;
         return `
           <div class="flow-node" data-fband="${b.id}" style="left: ${leftPct}%; top: ${topPct}%;" title="Click to filter ${b.label} devices">
@@ -2237,7 +2238,7 @@ class TplinkBe230Card extends HTMLElement {
     const top4NodesHtml = top4
       .map((d, idx) => {
         const leftPct = ((498 / 560) * 100).toFixed(1);
-        const topPct = ((top4Y[idx] / 310) * 100).toFixed(1);
+        const topPct = ((top4Y[idx] / 340) * 100).toFixed(1);
         const col = bandColorMap[d.cat] || "var(--be-5g)";
         const icon = this._iconForDevice(d);
         const valTxt =
@@ -2407,12 +2408,12 @@ class TplinkBe230Card extends HTMLElement {
 
     bodyEl.innerHTML = `
       <div class="flow-diagram-wrap">
-        <svg class="flow-svg" viewBox="0 0 560 310" preserveAspectRatio="none">
+        <svg class="flow-svg" viewBox="0 0 560 340" preserveAspectRatio="none">
           ${svgPaths.join("")}
         </svg>
 
         <!-- WAN Node -->
-        <div class="flow-node" style="left: 10.4%; top: 51.6%;" title="WAN IP: ${this._escape(data.wanIp)}">
+        <div class="flow-node" style="left: 10.4%; top: 47.4%;" title="WAN IP: ${this._escape(data.wanIp)}">
           <span class="flow-node-label">WAN / ISP</span>
           <div class="flow-circle" style="--node-color: var(--be-accent);">
             <ha-icon icon="mdi:earth"></ha-icon>
@@ -2422,7 +2423,7 @@ class TplinkBe230Card extends HTMLElement {
         </div>
 
         <!-- Central BE230 Router Hub -->
-        <div class="flow-node" id="flow-hub-node" style="left: 33.0%; top: 51.6%;" title="Click to show all bands (${this._escape(data.lanIp)})">
+        <div class="flow-node" id="flow-hub-node" style="left: 33.0%; top: 47.4%;" title="Click to show all bands (${this._escape(data.lanIp)})">
           <span class="flow-node-label">Archer BE230</span>
           <div class="flow-circle lg ${this._flowBandFilter === "all" ? "selected" : ""}" style="--node-color: var(--be-online);">
             <span class="flow-sub">CPU ${data.cpuUsage ?? 0}%</span>
