@@ -14,6 +14,7 @@ class TplinkBe230Card extends HTMLElement {
     this._config = null;
     this._overview = false;
     this._flowOnly = false;
+    this._diagramOnly = false;
     this._compact = false;
     this._view = "clients"; // clients | flow | dhcp
     this._filter = "active"; // active | all | 5g | 2g | wired | guest_iot | reserved
@@ -47,6 +48,7 @@ class TplinkBe230Card extends HTMLElement {
       title: "TP-Link Archer BE230",
       overview: false,
       flow: false,
+      diagram_only: false,
       compact: false,
       default_view: "clients",
       show_offline: false,
@@ -56,6 +58,9 @@ class TplinkBe230Card extends HTMLElement {
     };
     this._overview = Boolean(this._config.overview);
     this._flowOnly = Boolean(this._config.flow);
+    this._diagramOnly = Boolean(
+      this._config.diagram_only || (this._flowOnly && this._overview)
+    );
     this._compact = Boolean(this._config.compact);
     if (this._flowOnly || this._config.default_view === "flow") {
       this._view = "flow";
@@ -1432,6 +1437,11 @@ class TplinkBe230Card extends HTMLElement {
     const controlsEl = this.shadowRoot.getElementById("header-controls");
     const bodyEl = this.shadowRoot.getElementById("card-body");
 
+    if (this._flowOnly) {
+      this._renderFlowView(data, controlsEl, bodyEl, subtitleEl, reservedCount);
+      return;
+    }
+
     if (this._overview) {
       subtitleEl.textContent = `${activeCount} active clients · ${reservedCount} static DHCP · LAN ${data.lanIp}`;
       controlsEl.innerHTML = `
@@ -2008,7 +2018,9 @@ class TplinkBe230Card extends HTMLElement {
       return d.m.phyTotal;
     };
 
-    subtitleEl.textContent = `Live: ↓ ${this._fmtLiveSpeed(totalLiveRx)} · ↑ ${this._fmtLiveSpeed(totalLiveTx)} · Session Traffic: ${this._fmtBytes(totalTraffic)} · ${activeDevices.length} Active Clients`;
+    subtitleEl.textContent = this._diagramOnly
+      ? `↓ ${this._fmtLiveSpeed(totalLiveRx)} · ↑ ${this._fmtLiveSpeed(totalLiveTx)} · Σ ${this._fmtBytes(totalTraffic)} · ${activeDevices.length} Online`
+      : `Live: ↓ ${this._fmtLiveSpeed(totalLiveRx)} · ↑ ${this._fmtLiveSpeed(totalLiveTx)} · Session Traffic: ${this._fmtBytes(totalTraffic)} · ${activeDevices.length} Active Clients`;
 
     controlsEl.innerHTML = `
       ${
@@ -2023,13 +2035,20 @@ class TplinkBe230Card extends HTMLElement {
           : ""
       }
       <div class="pill-group">
-        <button class="btn ${mode === "live" ? "active" : ""}" data-fmetric="live" title="Real-time RX/TX speed">⚡ Live RX/TX</button>
-        <button class="btn ${mode === "phy" ? "active" : ""}" data-fmetric="phy" title="Negotiated Wi-Fi / Ethernet Link Capacity (Mbps)">📶 Link Rate</button>
-        <button class="btn ${mode === "traffic" ? "active" : ""}" data-fmetric="traffic" title="Cumulative Data Usage (GB)">📊 Total Data</button>
+        <button class="btn ${mode === "live" ? "active" : ""}" data-fmetric="live" title="Real-time RX/TX speed">⚡ ${this._diagramOnly ? "Live" : "Live RX/TX"}</button>
+        <button class="btn ${mode === "phy" ? "active" : ""}" data-fmetric="phy" title="Negotiated Wi-Fi / Ethernet Link Capacity (Mbps)">📶 ${this._diagramOnly ? "Link" : "Link Rate"}</button>
+        <button class="btn ${mode === "traffic" ? "active" : ""}" data-fmetric="traffic" title="Cumulative Data Usage (GB)">📊 ${this._diagramOnly ? "Data" : "Total Data"}</button>
       </div>
-      <button class="btn ${this._compact ? "active" : ""}" id="flow-compact-btn">Compact</button>
+      ${
+        this._diagramOnly
+          ? `<div class="pill-group"><button class="btn active" id="btn-flow-detail" title="Go to Network tab">Details →</button></div>`
+          : `<button class="btn ${this._compact ? "active" : ""}" id="flow-compact-btn">Compact</button>`
+      }
     `;
 
+    controlsEl.querySelector("#btn-flow-detail")?.addEventListener("click", () => {
+      this._navigate(this._config.detail_path || "/dashboard-tsentr-v2/network");
+    });
     controlsEl.querySelector("#tab-clients")?.addEventListener("click", () => {
       this._view = "clients";
       this._render();
@@ -2420,26 +2439,36 @@ class TplinkBe230Card extends HTMLElement {
         ${top4NodesHtml}
       </div>
 
-      <div class="dist-section">
+      <div class="dist-section" style="${this._diagramOnly ? "margin-bottom:0;" : ""}">
         <div class="dist-bar">${distBarHtml}</div>
         <div class="dist-legend">${distLegendHtml}</div>
       </div>
 
-      <div class="flow-matrix-header">
-        <span>Active Devices TX / RX Distribution (${displayedDevices.length} of ${activeDevices.length})</span>
-        ${
-          this._flowBandFilter !== "all"
-            ? `<button class="btn active" id="flow-reset-band">Showing: ${this._flowBandFilter.toUpperCase()} ✕</button>`
-            : `<span>Sorted by ${mode === "live" ? "Live Throughput" : mode === "traffic" ? "Total Traffic" : "Link Rate (Mbps)"}</span>`
-        }
-      </div>
+      ${
+        !this._diagramOnly
+          ? `
+        <div class="flow-matrix-header">
+          <span>Active Devices TX / RX Distribution (${displayedDevices.length} of ${activeDevices.length})</span>
+          ${
+            this._flowBandFilter !== "all"
+              ? `<button class="btn active" id="flow-reset-band">Showing: ${this._flowBandFilter.toUpperCase()} ✕</button>`
+              : `<span>Sorted by ${mode === "live" ? "Live Throughput" : mode === "traffic" ? "Total Traffic" : "Link Rate (Mbps)"}</span>`
+          }
+        </div>
 
-      <div class="flow-devices-grid">
-        ${devicesMatrixHtml || `<div class="empty-state">No active devices in this band.</div>`}
-      </div>
+        <div class="flow-devices-grid">
+          ${devicesMatrixHtml || `<div class="empty-state">No active devices in this band.</div>`}
+        </div>
+      `
+          : ""
+      }
     `;
 
     bodyEl.querySelector("#flow-hub-node")?.addEventListener("click", () => {
+      if (this._diagramOnly) {
+        this._navigate(this._config.detail_path || "/dashboard-tsentr-v2/network");
+        return;
+      }
       this._flowBandFilter = "all";
       this._render();
     });
@@ -2451,6 +2480,10 @@ class TplinkBe230Card extends HTMLElement {
 
     bodyEl.querySelectorAll("[data-fband]").forEach((el) => {
       el.addEventListener("click", () => {
+        if (this._diagramOnly) {
+          this._navigate(this._config.detail_path || "/dashboard-tsentr-v2/network");
+          return;
+        }
         const b = el.dataset.fband;
         this._flowBandFilter = this._flowBandFilter === b ? "all" : b;
         this._render();
