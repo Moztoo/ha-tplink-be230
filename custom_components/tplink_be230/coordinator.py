@@ -13,7 +13,9 @@ from tplinkrouterc6u import TplinkRouterProvider
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -27,6 +29,7 @@ from .const import (
     DEFAULT_USERNAME,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
+    EVENT_NEW_DEVICE_CONNECTED,
     NETWORK_BANDS,
     NETWORK_LABELS,
     SIGNAL_NEW_DEVICE,
@@ -49,6 +52,11 @@ class TplinkBE230Coordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._router_lock = asyncio.Lock()
         self.known_devices: dict[str, dict[str, Any]] = {}
         self.registered_macs: set[str] = set()
+        self.persisted_macs: set[str] = set()
+        self._known_macs_loaded: bool = False
+        self._store: Store[dict[str, Any]] = Store(
+            hass, 1, f"{DOMAIN}_known_macs_{entry.entry_id}"
+        )
         self.firmware_info: dict[str, str] = {
             "model": "Archer BE230",
             "hardware_version": "1.0",
@@ -283,8 +291,30 @@ class TplinkBE230Coordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raise HomeAssistantError(f"Failed to update DHCP server settings: {err}") from err
         await self.async_request_refresh()
 
+    async def async_init_known_macs(self) -> None:
+        """Load persisted known MACs from storage and existing entity registry."""
+        stored = await self._store.async_load()
+        if isinstance(stored, dict) and isinstance(stored.get("macs"), list):
+            for m in stored["macs"]:
+                if isinstance(m, str) and m.strip():
+                    self.persisted_macs.add(normalize_mac(m))
+
+        # Also seed from existing entity registry tracker entries so existing devices do not fire alerts
+        ent_reg = er.async_get(self.hass)
+        prefix = f"{self.entry.entry_id}_tracker_"
+        for reg_entry in er.async_entries_for_config_entry(ent_reg, self.entry.entry_id):
+            if reg_entry.unique_id and reg_entry.unique_id.startswith(prefix):
+                mac_slug = reg_entry.unique_id[len(prefix):]
+                if len(mac_slug) == 17:
+                    self.persisted_macs.add(mac_slug.upper().replace("_", ":"))
+
+        self._known_macs_loaded = True
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from the TP-Link Archer BE230 router."""
+        if not self._known_macs_loaded:
+            await self.async_init_known_macs()
+
         async with self._router_lock:
             try:
                 raw = await self.hass.async_add_executor_job(self._poll_router_sync)
@@ -476,6 +506,45 @@ class TplinkBE230Coordinator(DataUpdateCoordinator[dict[str, Any]]):
                 f"{SIGNAL_NEW_DEVICE}_{self.entry.entry_id}",
                 new_macs,
             )
+
+        # Check for brand-new unknown MACs and fire event
+        if not self.persisted_macs:
+            # First time ever initializing store: seed with all currently known MACs without alerting
+            self.persisted_macs.update(self.known_devices.keys())
+            await self._store.async_save({"macs": sorted(self.persisted_macs)})
+        else:
+            newly_connected: list[dict[str, Any]] = []
+            for mac, dev_info in self.known_devices.items():
+                if mac not in self.persisted_macs:
+                    self.persisted_macs.add(mac)
+                    if dev_info.get("active", False):
+                        newly_connected.append(dev_info)
+            if newly_connected:
+                await self._store.async_save({"macs": sorted(self.persisted_macs)})
+                for dev_info in newly_connected:
+                    _LOGGER.info(
+                        "New device connected to TP-Link BE230: %s (%s / %s)",
+                        dev_info.get("hostname"),
+                        dev_info.get("ip"),
+                        dev_info.get("mac"),
+                    )
+                    self.hass.bus.async_fire(
+                        EVENT_NEW_DEVICE_CONNECTED,
+                        {
+                            "hostname": dev_info.get("hostname"),
+                            "ip": dev_info.get("ip"),
+                            "mac": dev_info.get("mac"),
+                            "network": dev_info.get("network"),
+                            "network_type": dev_info.get("network_type"),
+                            "band": dev_info.get("band"),
+                            "is_wired": dev_info.get("is_wired"),
+                            "is_guest": dev_info.get("is_guest"),
+                            "is_iot": dev_info.get("is_iot"),
+                        },
+                    )
+            elif len(self.persisted_macs) > 0:
+                # Ensure any offline reserved/leased MACs added above are also persisted
+                await self._store.async_save({"macs": sorted(self.persisted_macs)})
 
         cpu_raw = getattr(status, "cpu_usage", None)
         mem_raw = getattr(status, "mem_usage", None)

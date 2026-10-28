@@ -15,6 +15,7 @@ DEFAULT_VERIFY_SSL = False
 DEFAULT_SCAN_INTERVAL = 30
 
 SIGNAL_NEW_DEVICE = f"{DOMAIN}_new_device"
+EVENT_NEW_DEVICE_CONNECTED = f"{DOMAIN}_new_device_connected"
 
 NETWORK_LABELS = {
     "host_2g": "Wi-Fi 2.4GHz",
