@@ -13,11 +13,14 @@ class TplinkBe230Card extends HTMLElement {
     this._hass = null;
     this._config = null;
     this._overview = false;
+    this._flowOnly = false;
     this._compact = false;
-    this._view = "clients"; // clients | dhcp
+    this._view = "clients"; // clients | flow | dhcp
     this._filter = "active"; // active | all | 5g | 2g | wired | guest_iot | reserved
     this._dhcpFilter = "all"; // all | reserved | dynamic
     this._ovBandFilter = "all";
+    this._flowBandFilter = "all"; // all | 5g | 2g | wired | guest_iot
+    this._flowMetric = "auto"; // auto | live | phy | traffic
     this._search = "";
     this._copiedText = null;
 
@@ -43,6 +46,7 @@ class TplinkBe230Card extends HTMLElement {
     this._config = {
       title: "TP-Link Archer BE230",
       overview: false,
+      flow: false,
       compact: false,
       default_view: "clients",
       show_offline: false,
@@ -51,8 +55,15 @@ class TplinkBe230Card extends HTMLElement {
       ...config,
     };
     this._overview = Boolean(this._config.overview);
+    this._flowOnly = Boolean(this._config.flow);
     this._compact = Boolean(this._config.compact);
-    this._view = this._config.default_view === "dhcp" ? "dhcp" : "clients";
+    if (this._flowOnly || this._config.default_view === "flow") {
+      this._view = "flow";
+    } else if (this._config.default_view === "dhcp") {
+      this._view = "dhcp";
+    } else {
+      this._view = "clients";
+    }
     if (this._config.show_offline) {
       this._filter = "all";
     }
@@ -259,6 +270,10 @@ class TplinkBe230Card extends HTMLElement {
         packets_received: a.packets_received ?? null,
         down_speed: a.down_speed ?? null,
         up_speed: a.up_speed ?? null,
+        tx_rate: a.tx_rate ?? null,
+        rx_rate: a.rx_rate ?? null,
+        traffic_usage: a.traffic_usage ?? null,
+        online_time: a.online_time ?? null,
         last_seen: a.last_seen ?? null,
       });
     }
@@ -290,6 +305,10 @@ class TplinkBe230Card extends HTMLElement {
           packets_received: d.packets_received ?? existing?.packets_received ?? null,
           down_speed: d.down_speed ?? existing?.down_speed ?? null,
           up_speed: d.up_speed ?? existing?.up_speed ?? null,
+          tx_rate: d.tx_rate ?? existing?.tx_rate ?? null,
+          rx_rate: d.rx_rate ?? existing?.rx_rate ?? null,
+          traffic_usage: d.traffic_usage ?? existing?.traffic_usage ?? null,
+          online_time: d.online_time ?? existing?.online_time ?? null,
           last_seen: d.last_seen ?? existing?.last_seen ?? null,
         });
       }
@@ -963,6 +982,291 @@ class TplinkBe230Card extends HTMLElement {
           color: var(--be-text-secondary);
           font-size: 0.8rem;
         }
+
+        /* =================================================================
+           Network Traffic & TX/RX Distribution Flow View (Power-Card Style)
+           ================================================================= */
+        .flow-diagram-wrap {
+          position: relative;
+          width: 100%;
+          aspect-ratio: 560 / 310;
+          max-height: 325px;
+          margin: 4px auto 10px auto;
+          user-select: none;
+        }
+        ha-card.compact .flow-diagram-wrap {
+          aspect-ratio: 560 / 245;
+          max-height: 245px;
+        }
+        svg.flow-svg {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          overflow: visible;
+        }
+        .flow-path {
+          fill: none;
+          stroke-width: 2;
+          stroke-linecap: round;
+          opacity: 0.52;
+          transition: opacity 0.25s ease, stroke-width 0.25s ease;
+        }
+        .flow-path.inactive {
+          opacity: 0.14;
+          stroke-dasharray: 3 4;
+        }
+        .flow-node {
+          position: absolute;
+          transform: translate(-50%, -50%);
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          cursor: pointer;
+          z-index: 2;
+        }
+        .flow-node-label {
+          font-size: 0.68rem;
+          font-weight: 600;
+          color: var(--be-text-secondary);
+          margin-bottom: 3px;
+          white-space: nowrap;
+          max-width: 96px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .flow-node-label.bottom {
+          margin-bottom: 0;
+          margin-top: 3px;
+        }
+        .flow-circle {
+          width: 64px;
+          height: 64px;
+          border-radius: 50%;
+          background: var(--be-bg);
+          border: 2px solid var(--node-color, var(--be-divider));
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 1px;
+          transition: transform 0.16s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+          box-sizing: border-box;
+        }
+        .flow-node:hover .flow-circle {
+          transform: scale(1.06);
+          box-shadow: 0 0 14px color-mix(in srgb, var(--node-color, var(--be-accent)) 35%, transparent);
+        }
+        .flow-circle.selected {
+          box-shadow: 0 0 0 3px color-mix(in srgb, var(--node-color, var(--be-accent)) 32%, transparent);
+        }
+        .flow-circle.lg {
+          width: 76px;
+          height: 76px;
+          border-width: 2.5px;
+        }
+        .flow-circle.sm {
+          width: 54px;
+          height: 54px;
+          border-width: 1.8px;
+        }
+        ha-card.compact .flow-circle {
+          width: 54px;
+          height: 54px;
+        }
+        ha-card.compact .flow-circle.lg {
+          width: 64px;
+          height: 64px;
+        }
+        ha-card.compact .flow-circle.sm {
+          width: 46px;
+          height: 46px;
+        }
+        .flow-circle.inactive {
+          opacity: 0.45;
+          border-style: dashed;
+        }
+        .flow-circle ha-icon {
+          --mdc-icon-size: 18px;
+          color: var(--node-color, var(--be-text-primary));
+        }
+        .flow-circle.lg ha-icon {
+          --mdc-icon-size: 22px;
+        }
+        .flow-circle.sm ha-icon {
+          --mdc-icon-size: 15px;
+        }
+        .flow-val {
+          font-size: 0.68rem;
+          font-weight: 700;
+          color: var(--be-text-primary);
+          line-height: 1.05;
+          white-space: nowrap;
+        }
+        .flow-sub {
+          font-size: 0.58rem;
+          color: var(--be-text-secondary);
+          line-height: 1;
+          white-space: nowrap;
+        }
+        ha-card.compact .flow-sub {
+          display: none;
+        }
+
+        /* Proportional Breakdown Bar */
+        .dist-section {
+          margin-top: 8px;
+          margin-bottom: 12px;
+          padding-top: 9px;
+          border-top: 1px solid var(--be-divider);
+        }
+        .dist-bar {
+          display: flex;
+          width: 100%;
+          height: 8px;
+          border-radius: 4px;
+          overflow: hidden;
+          background: var(--be-input);
+          gap: 1px;
+        }
+        .dist-seg {
+          height: 100%;
+          transition: width 0.35s ease;
+        }
+        .dist-legend {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          margin-top: 6px;
+          font-size: 0.68rem;
+          color: var(--be-text-secondary);
+        }
+        .dist-item {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          cursor: pointer;
+        }
+        .dist-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 2px;
+        }
+        .dist-item strong {
+          color: var(--be-text-primary);
+          font-weight: 600;
+        }
+
+        /* Reactive Active Devices TX/RX Distribution Matrix */
+        .flow-matrix-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 8px;
+          font-size: 0.72rem;
+          font-weight: 600;
+          color: var(--be-text-secondary);
+        }
+        .flow-devices-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
+        @media (max-width: 520px) {
+          .flow-devices-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+        .flow-dev-card {
+          background: var(--be-surface);
+          border: 1px solid var(--be-divider);
+          border-radius: 10px;
+          padding: 8px 10px;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          cursor: pointer;
+          transition: border-color 0.18s ease, transform 0.15s ease;
+          min-width: 0;
+        }
+        .flow-dev-card:hover {
+          border-color: color-mix(in srgb, var(--be-accent) 48%, var(--be-divider));
+        }
+        .flow-dev-card.cat-5g { border-left: 3px solid var(--be-5g); }
+        .flow-dev-card.cat-2g { border-left: 3px solid var(--be-2g); }
+        .flow-dev-card.cat-wired { border-left: 3px solid var(--be-lan); }
+        .flow-dev-card.cat-guest_iot { border-left: 3px solid var(--be-guest); }
+
+        .flow-dev-top {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 6px;
+          min-width: 0;
+        }
+        .flow-dev-meta {
+          font-size: 0.62rem;
+          color: var(--be-text-secondary);
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          white-space: nowrap;
+          flex-shrink: 0;
+        }
+        .txrx-bars {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+        .txrx-row {
+          display: grid;
+          grid-template-columns: 28px 1fr 68px;
+          align-items: center;
+          gap: 6px;
+          font-size: 0.64rem;
+        }
+        .txrx-lbl {
+          font-weight: 700;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          letter-spacing: -0.02em;
+        }
+        .txrx-lbl.rx { color: var(--be-5g); }
+        .txrx-lbl.tx { color: var(--be-2g); }
+        .txrx-track {
+          height: 6px;
+          border-radius: 999px;
+          background: var(--be-input);
+          overflow: hidden;
+          position: relative;
+        }
+        .txrx-fill {
+          height: 100%;
+          border-radius: 999px;
+          transition: width 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+          position: relative;
+        }
+        .txrx-fill.rx {
+          background: linear-gradient(90deg, color-mix(in srgb, var(--be-5g) 65%, transparent), var(--be-5g));
+        }
+        .txrx-fill.tx {
+          background: linear-gradient(90deg, color-mix(in srgb, var(--be-2g) 65%, transparent), var(--be-2g));
+        }
+        .txrx-val {
+          text-align: right;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-weight: 600;
+          color: var(--be-text-primary);
+          white-space: nowrap;
+        }
+        .flow-dev-foot {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          font-size: 0.61rem;
+          color: var(--be-text-secondary);
+          padding-top: 2px;
+          border-top: 1px dashed color-mix(in srgb, var(--be-divider) 65%, transparent);
+        }
       </style>
       <ha-card id="card-root">
         <div class="header">
@@ -1239,8 +1543,13 @@ class TplinkBe230Card extends HTMLElement {
       return;
     }
 
-    // Full Detailed Mode (Clients View OR DHCP Manager View)
+    // Full Detailed Mode (Clients View, Traffic Flow View, OR DHCP Manager View)
     subtitleEl.textContent = `${activeCount} connected · ${reservedCount} static DHCP · 5GHz: ${count5g} · 2.4GHz: ${count2g} · IoT: ${countGuestIot} · Wired: ${countWired}`;
+
+    if (this._flowOnly || this._view === "flow") {
+      this._renderFlowView(data, controlsEl, bodyEl, subtitleEl, reservedCount);
+      return;
+    }
 
     if (this._view === "dhcp") {
       this._renderDhcpManagerView(data, controlsEl, bodyEl, reservedCount);
@@ -1262,6 +1571,7 @@ class TplinkBe230Card extends HTMLElement {
     controlsEl.innerHTML = `
       <div class="pill-group">
         <button class="btn active" id="tab-clients">Clients</button>
+        <button class="btn" id="tab-flow">⚡ Traffic Flow</button>
         <button class="btn" id="tab-dhcp">DHCP Manager (${reservedCount})</button>
       </div>
       <input type="text" class="search-input" id="search-box" placeholder="Search name, IP, MAC..." value="${this._escape(this._search)}" />
@@ -1275,6 +1585,11 @@ class TplinkBe230Card extends HTMLElement {
       </div>
       <button class="btn ${this._compact ? "active" : ""}" id="compact-btn" title="Toggle compact view">Compact</button>
     `;
+
+    controlsEl.querySelector("#tab-flow")?.addEventListener("click", () => {
+      this._view = "flow";
+      this._render();
+    });
 
     controlsEl.querySelector("#tab-dhcp")?.addEventListener("click", () => {
       this._view = "dhcp";
@@ -1424,6 +1739,7 @@ class TplinkBe230Card extends HTMLElement {
     controlsEl.innerHTML = `
       <div class="pill-group">
         <button class="btn" id="tab-clients">Clients (${data.devices.length})</button>
+        <button class="btn" id="tab-flow">⚡ Traffic Flow</button>
         <button class="btn active" id="tab-dhcp">DHCP Manager (${reservedCount})</button>
       </div>
       <input type="text" class="search-input" id="dhcp-search" placeholder="Search IP, MAC, name..." value="${this._escape(this._search)}" />
@@ -1438,6 +1754,11 @@ class TplinkBe230Card extends HTMLElement {
 
     controlsEl.querySelector("#tab-clients")?.addEventListener("click", () => {
       this._view = "clients";
+      this._render();
+    });
+
+    controlsEl.querySelector("#tab-flow")?.addEventListener("click", () => {
+      this._view = "flow";
       this._render();
     });
 
@@ -1587,6 +1908,563 @@ class TplinkBe230Card extends HTMLElement {
     });
   }
 
+  _fmtLiveSpeed(bytesPerSec) {
+    const bps = Math.max(0, Number(bytesPerSec) || 0);
+    if (bps === 0) return "0 KB/s";
+    if (bps >= 1048576) {
+      return `${(bps / 1048576).toFixed(1)} MB/s`;
+    }
+    if (bps >= 1024) {
+      return `${(bps / 1024).toFixed(1)} KB/s`;
+    }
+    return `${Math.round(bps)} B/s`;
+  }
+
+  _fmtPhySpeed(kbps) {
+    const k = Math.max(0, Number(kbps) || 0);
+    if (k <= 0) return "0 Mbps";
+    const mbps = k / 1000;
+    if (mbps >= 1000) {
+      return `${(mbps / 1000).toFixed(2)} Gbps`;
+    }
+    return `${Math.round(mbps)} Mbps`;
+  }
+
+  _fmtBytes(bytes) {
+    const b = Math.max(0, Number(bytes) || 0);
+    if (b <= 0) return "0 MB";
+    if (b >= 1099511627776) {
+      return `${(b / 1099511627776).toFixed(2)} TB`;
+    }
+    if (b >= 1073741824) {
+      return `${(b / 1073741824).toFixed(1)} GB`;
+    }
+    if (b >= 1048576) {
+      return `${(b / 1048576).toFixed(1)} MB`;
+    }
+    return `${Math.round(b / 1024)} KB`;
+  }
+
+  _flowDuration(val, maxVal) {
+    const v = Math.max(0, Number(val) || 0);
+    if (v <= 0) return 0;
+    const norm = Math.min(1, v / Math.max(1, maxVal));
+    return (3.8 - norm * 2.7).toFixed(2);
+  }
+
+  _deviceMetrics(d) {
+    const liveRx = Math.max(0, Number(d.down_speed) || 0);
+    const liveTx = Math.max(0, Number(d.up_speed) || 0);
+    const isWired = this._networkCategory(d) === "wired";
+    // TP-Link BE230 reports tx_rate / rx_rate in kbps for Wi-Fi; wired ports default to 1000000 kbps (1 Gbps)
+    const phyRx = d.rx_rate ? Number(d.rx_rate) : isWired && d.active ? 1000000 : 0;
+    const phyTx = d.tx_rate ? Number(d.tx_rate) : isWired && d.active ? 1000000 : 0;
+    const totalBytes = Math.max(0, Number(d.traffic_usage) || 0);
+    const pktsRx = Math.max(0, Number(d.packets_received) || 0);
+    const pktsTx = Math.max(0, Number(d.packets_sent) || 0);
+    const pktRatioRx = pktsRx + pktsTx > 0 ? pktsRx / (pktsRx + pktsTx) : 0.65;
+    return {
+      liveRx,
+      liveTx,
+      liveTotal: liveRx + liveTx,
+      phyRx,
+      phyTx,
+      phyTotal: phyRx + phyTx,
+      totalBytes,
+      estBytesRx: totalBytes * pktRatioRx,
+      estBytesTx: totalBytes * (1 - pktRatioRx),
+      pktsRx,
+      pktsTx,
+    };
+  }
+
+  _renderFlowView(data, controlsEl, bodyEl, subtitleEl, reservedCount) {
+    const activeDevices = data.devices.filter((d) => d.active);
+    const enriched = activeDevices.map((d) => ({
+      ...d,
+      cat: this._networkCategory(d),
+      m: this._deviceMetrics(d),
+    }));
+
+    const totalLiveRx = enriched.reduce((s, d) => s + d.m.liveRx, 0);
+    const totalLiveTx = enriched.reduce((s, d) => s + d.m.liveTx, 0);
+    const totalLive = totalLiveRx + totalLiveTx;
+    const totalTraffic = enriched.reduce((s, d) => s + d.m.totalBytes, 0);
+
+    // Determine effective metric mode ("live" | "phy" | "traffic")
+    let mode = this._flowMetric;
+    if (mode === "auto") {
+      mode = totalLive > 512 ? "live" : "phy";
+    }
+
+    const metricScore = (d) => {
+      if (mode === "live") {
+        // Primary sort by live throughput, tie-break by PHY link & traffic
+        return d.m.liveTotal > 0 ? d.m.liveTotal * 1000000 + d.m.phyTotal : d.m.phyTotal * 0.001;
+      }
+      if (mode === "traffic") {
+        return d.m.totalBytes;
+      }
+      return d.m.phyTotal;
+    };
+
+    subtitleEl.textContent = `Live: ↓ ${this._fmtLiveSpeed(totalLiveRx)} · ↑ ${this._fmtLiveSpeed(totalLiveTx)} · Session Traffic: ${this._fmtBytes(totalTraffic)} · ${activeDevices.length} Active Clients`;
+
+    controlsEl.innerHTML = `
+      ${
+        !this._flowOnly
+          ? `
+        <div class="pill-group">
+          <button class="btn" id="tab-clients">Clients (${data.devices.length})</button>
+          <button class="btn active" id="tab-flow">⚡ Traffic Flow</button>
+          <button class="btn" id="tab-dhcp">DHCP Manager (${reservedCount})</button>
+        </div>
+      `
+          : ""
+      }
+      <div class="pill-group">
+        <button class="btn ${mode === "live" ? "active" : ""}" data-fmetric="live" title="Real-time RX/TX speed">⚡ Live RX/TX</button>
+        <button class="btn ${mode === "phy" ? "active" : ""}" data-fmetric="phy" title="Negotiated Wi-Fi / Ethernet Link Capacity (Mbps)">📶 Link Rate</button>
+        <button class="btn ${mode === "traffic" ? "active" : ""}" data-fmetric="traffic" title="Cumulative Data Usage (GB)">📊 Total Data</button>
+      </div>
+      <button class="btn ${this._compact ? "active" : ""}" id="flow-compact-btn">Compact</button>
+    `;
+
+    controlsEl.querySelector("#tab-clients")?.addEventListener("click", () => {
+      this._view = "clients";
+      this._render();
+    });
+    controlsEl.querySelector("#tab-dhcp")?.addEventListener("click", () => {
+      this._view = "dhcp";
+      this._render();
+    });
+    controlsEl.querySelectorAll("[data-fmetric]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this._flowMetric = btn.dataset.fmetric;
+        this._render();
+      });
+    });
+    controlsEl.querySelector("#flow-compact-btn")?.addEventListener("click", () => {
+      this._compact = !this._compact;
+      this._render();
+    });
+
+    // Aggregate per band ("5g", "2g", "wired", "guest_iot")
+    const bandDefs = [
+      { id: "5g", label: "5GHz / MLO", icon: "mdi:wifi-star", color: "var(--be-5g)", y: 55 },
+      { id: "2g", label: "2.4GHz", icon: "mdi:wifi", color: "var(--be-2g)", y: 128 },
+      { id: "wired", label: "Ethernet LAN", icon: "mdi:lan-connect", color: "var(--be-lan)", y: 201 },
+      { id: "guest_iot", label: "IoT / Guest", icon: "mdi:access-point-network", color: "var(--be-guest)", y: 268 },
+    ];
+
+    const bands = bandDefs.map((b) => {
+      const devs = enriched.filter((d) => d.cat === b.id);
+      const rxLive = devs.reduce((s, d) => s + d.m.liveRx, 0);
+      const txLive = devs.reduce((s, d) => s + d.m.liveTx, 0);
+      const rxPhy = devs.reduce((s, d) => s + d.m.phyRx, 0);
+      const txPhy = devs.reduce((s, d) => s + d.m.phyTx, 0);
+      const bytes = devs.reduce((s, d) => s + d.m.totalBytes, 0);
+      const val =
+        mode === "live"
+          ? rxLive + txLive > 0
+            ? rxLive + txLive
+            : devs.length * 1024
+          : mode === "traffic"
+          ? bytes
+          : rxPhy + txPhy;
+      const mainLabel =
+        mode === "live"
+          ? rxLive + txLive > 0
+            ? this._fmtLiveSpeed(rxLive + txLive)
+            : `${devs.length} Dev`
+          : mode === "traffic"
+          ? this._fmtBytes(bytes)
+          : this._fmtPhySpeed(Math.round((rxPhy + txPhy) / 2));
+      const subLabel =
+        mode === "live" && rxLive + txLive > 0
+          ? `↓${this._fmtLiveSpeed(rxLive)}`
+          : `${devs.length} online`;
+      return {
+        ...b,
+        devs,
+        count: devs.length,
+        val: devs.length > 0 ? Math.max(1, val) : 0,
+        mainLabel,
+        subLabel,
+      };
+    });
+
+    const maxBandVal = Math.max(1, ...bands.map((b) => b.val));
+
+    // Top 4 active devices for the right-hand side of the flow topology
+    const sortedDevices = [...enriched].sort((a, b) => metricScore(b) - metricScore(a));
+    const top4 = sortedDevices.slice(0, 4);
+    const top4Y = [52, 124, 198, 268];
+    const maxTopVal = Math.max(
+      1,
+      ...top4.map((d) =>
+        mode === "live"
+          ? Math.max(1024, d.m.liveTotal)
+          : mode === "traffic"
+          ? d.m.totalBytes
+          : d.m.phyTotal
+      )
+    );
+
+    const bandYMap = { "5g": 55, "2g": 128, wired: 201, guest_iot: 268 };
+    const bandColorMap = {
+      "5g": "var(--be-5g)",
+      "2g": "var(--be-2g)",
+      wired: "var(--be-lan)",
+      guest_iot: "var(--be-guest)",
+    };
+
+    // Build SVG paths & animated particles
+    // Coordinates in viewBox="0 0 560 310":
+    // WAN node: (58, 160) -> Router Hub: (185, 160) -> Band nodes: (342, b.y) -> Top 4 Device nodes: (498, top4Y[i])
+    const wanActive = activeDevices.length > 0;
+    const wanDur = this._flowDuration(maxBandVal, maxBandVal);
+
+    const svgPaths = [];
+    // 1. WAN -> BE230 Hub
+    svgPaths.push(`
+      <path class="flow-path ${wanActive ? "" : "inactive"}" style="stroke: var(--be-accent);" d="M 58 160 L 185 160" />
+      ${
+        wanActive
+          ? `<circle class="flow-dot" r="3.6" style="fill: var(--be-accent);">
+               <animateMotion dur="${wanDur}s" repeatCount="indefinite" path="M 58 160 L 185 160" />
+             </circle>
+             <circle class="flow-dot" r="2.6" style="fill: var(--be-online); opacity: 0.85;">
+               <animateMotion dur="${(Number(wanDur) * 1.25).toFixed(2)}s" repeatCount="indefinite" path="M 185 160 L 58 160" />
+             </circle>`
+          : ""
+      }
+    `);
+
+    // 2. BE230 Hub -> Band Nodes
+    for (const b of bands) {
+      const pathD = `M 185 160 C 255 160, 275 ${b.y}, 342 ${b.y}`;
+      const revPathD = `M 342 ${b.y} C 275 ${b.y}, 255 160, 185 160`;
+      const isAct = b.count > 0;
+      const dur = this._flowDuration(b.val, maxBandVal);
+      svgPaths.push(`
+        <path class="flow-path ${isAct ? "" : "inactive"}" style="stroke: ${b.color};" d="${pathD}" />
+        ${
+          isAct
+            ? `<circle class="flow-dot" r="3.2" style="fill: ${b.color};">
+                 <animateMotion dur="${dur}s" repeatCount="indefinite" path="${pathD}" />
+               </circle>
+               <circle class="flow-dot" r="2.2" style="fill: ${b.color}; opacity: 0.65;">
+                 <animateMotion dur="${(Number(dur) * 1.35).toFixed(2)}s" repeatCount="indefinite" path="${revPathD}" />
+               </circle>`
+            : ""
+        }
+      `);
+    }
+
+    // 3. Band Nodes -> Top 4 Active Client Nodes
+    top4.forEach((d, idx) => {
+      const sy = bandYMap[d.cat] || 128;
+      const ty = top4Y[idx];
+      const col = bandColorMap[d.cat] || "var(--be-5g)";
+      const pathD = `M 342 ${sy} C 415 ${sy}, 430 ${ty}, 498 ${ty}`;
+      const rawVal =
+        mode === "live"
+          ? Math.max(1024, d.m.liveTotal)
+          : mode === "traffic"
+          ? Math.max(1, d.m.totalBytes)
+          : Math.max(1, d.m.phyTotal);
+      const dur = this._flowDuration(rawVal, maxTopVal);
+      svgPaths.push(`
+        <path class="flow-path" style="stroke: ${col}; opacity: 0.42;" d="${pathD}" />
+        <circle class="flow-dot" r="2.9" style="fill: ${col};">
+          <animateMotion dur="${dur}s" repeatCount="indefinite" path="${pathD}" />
+        </circle>
+      `);
+    });
+
+    // HTML Overlay Nodes for SVG Diagram
+    const wanSub =
+      totalLive > 0
+        ? `↑ ${this._fmtLiveSpeed(totalLiveTx)}`
+        : data.wanIp !== "--"
+        ? data.wanIp
+        : "Online";
+    const wanVal =
+      mode === "traffic"
+        ? this._fmtBytes(totalTraffic)
+        : totalLive > 0
+        ? `↓ ${this._fmtLiveSpeed(totalLiveRx)}`
+        : `${activeDevices.length} Clients`;
+
+    const bandNodesHtml = bands
+      .map((b) => {
+        const leftPct = ((342 / 560) * 100).toFixed(1);
+        const topPct = ((b.y / 310) * 100).toFixed(1);
+        const isSel = this._flowBandFilter === b.id;
+        return `
+          <div class="flow-node" data-fband="${b.id}" style="left: ${leftPct}%; top: ${topPct}%;" title="Click to filter ${b.label} devices">
+            <div class="flow-circle ${b.count === 0 ? "inactive" : ""} ${isSel ? "selected" : ""}" style="--node-color: ${b.color};">
+              <ha-icon icon="${b.icon}"></ha-icon>
+              <span class="flow-val">${b.mainLabel}</span>
+              <span class="flow-sub">${b.subLabel}</span>
+            </div>
+            <span class="flow-node-label bottom">${b.label}</span>
+          </div>
+        `;
+      })
+      .join("");
+
+    const top4NodesHtml = top4
+      .map((d, idx) => {
+        const leftPct = ((498 / 560) * 100).toFixed(1);
+        const topPct = ((top4Y[idx] / 310) * 100).toFixed(1);
+        const col = bandColorMap[d.cat] || "var(--be-5g)";
+        const icon = this._iconForDevice(d);
+        const valTxt =
+          mode === "live"
+            ? d.m.liveTotal > 0
+              ? this._fmtLiveSpeed(d.m.liveTotal)
+              : this._fmtPhySpeed(d.m.phyRx)
+            : mode === "traffic"
+            ? this._fmtBytes(d.m.totalBytes)
+            : this._fmtPhySpeed(d.m.phyRx);
+        const subTxt =
+          mode === "live" && d.m.liveTotal > 0
+            ? `↑${this._fmtLiveSpeed(d.m.liveTx)}`
+            : d.ip !== "--"
+            ? `.${d.ip.split(".").slice(-1)[0]}`
+            : d.band;
+        return `
+          <div class="flow-node" data-fentity="${d.entityId || ""}" style="left: ${leftPct}%; top: ${topPct}%;" title="${this._escape(d.hostname)} (${this._escape(d.ip)})">
+            <div class="flow-circle sm" style="--node-color: ${col};">
+              <ha-icon icon="${icon}"></ha-icon>
+              <span class="flow-val">${valTxt}</span>
+              <span class="flow-sub">${subTxt}</span>
+            </div>
+            <span class="flow-node-label bottom">${this._escape(d.hostname)}</span>
+          </div>
+        `;
+      })
+      .join("");
+
+    // Proportional Breakdown Bar
+    const totalBandWeight = Math.max(1, bands.reduce((s, b) => s + (b.count > 0 ? b.val : 0), 0));
+    const distBarHtml = bands
+      .filter((b) => b.count > 0)
+      .map((b) => {
+        const pct = Math.max(2, (b.val / totalBandWeight) * 100);
+        return `<div class="dist-seg" style="width:${pct.toFixed(1)}%; background:${b.color};" title="${b.label}: ${b.mainLabel} (${Math.round(pct)}%)"></div>`;
+      })
+      .join("");
+
+    const distLegendHtml = bands
+      .map((b) => {
+        const pct = b.count > 0 ? Math.round((b.val / totalBandWeight) * 100) : 0;
+        return `
+          <div class="dist-item" data-fband="${b.id}" title="Click to filter by ${b.label}">
+            <span class="dist-dot" style="background:${b.color};"></span>
+            ${b.label}: <strong>${b.mainLabel}</strong> (${pct}%)
+          </div>
+        `;
+      })
+      .join("");
+
+    // Filtered list of ALL active devices for the live TX/RX matrix
+    const displayedDevices = sortedDevices.filter((d) =>
+      this._flowBandFilter === "all" ? true : d.cat === this._flowBandFilter
+    );
+
+    // Compute max RX / TX across displayed devices for smooth relative bar scaling
+    const maxRxVal = Math.max(
+      1,
+      ...displayedDevices.map((d) =>
+        mode === "live"
+          ? d.m.liveRx > 0
+            ? d.m.liveRx
+            : d.m.phyRx
+          : mode === "traffic"
+          ? d.m.estBytesRx
+          : d.m.phyRx
+      )
+    );
+    const maxTxVal = Math.max(
+      1,
+      ...displayedDevices.map((d) =>
+        mode === "live"
+          ? d.m.liveTx > 0
+            ? d.m.liveTx
+            : d.m.phyTx
+          : mode === "traffic"
+          ? d.m.estBytesTx
+          : d.m.phyTx
+      )
+    );
+
+    const devicesMatrixHtml = displayedDevices
+      .map((d) => {
+        const icon = this._iconForDevice(d);
+        const rxVal =
+          mode === "live"
+            ? d.m.liveRx > 0
+              ? d.m.liveRx
+              : d.m.phyRx * 0.25
+            : mode === "traffic"
+            ? d.m.estBytesRx
+            : d.m.phyRx;
+        const txVal =
+          mode === "live"
+            ? d.m.liveTx > 0
+              ? d.m.liveTx
+              : d.m.phyTx * 0.25
+            : mode === "traffic"
+            ? d.m.estBytesTx
+            : d.m.phyTx;
+
+        const rxPct = Math.min(100, Math.max(4, Math.round((rxVal / maxRxVal) * 100)));
+        const txPct = Math.min(100, Math.max(4, Math.round((txVal / maxTxVal) * 100)));
+
+        const rxText =
+          mode === "live"
+            ? d.m.liveRx > 0
+              ? this._fmtLiveSpeed(d.m.liveRx)
+              : this._fmtPhySpeed(d.m.phyRx)
+            : mode === "traffic"
+            ? this._fmtBytes(d.m.estBytesRx)
+            : this._fmtPhySpeed(d.m.phyRx);
+
+        const txText =
+          mode === "live"
+            ? d.m.liveTx > 0
+              ? this._fmtLiveSpeed(d.m.liveTx)
+              : this._fmtPhySpeed(d.m.phyTx)
+            : mode === "traffic"
+            ? this._fmtBytes(d.m.estBytesTx)
+            : this._fmtPhySpeed(d.m.phyTx);
+
+        const sigText = d.signal !== null && d.signal !== undefined ? `${d.signal} dBm` : d.band;
+        const totalDataTxt = d.m.totalBytes > 0 ? `Σ ${this._fmtBytes(d.m.totalBytes)}` : "Active";
+        const phySummary =
+          d.m.phyRx > 0
+            ? `PHY ↓${this._fmtPhySpeed(d.m.phyRx)} ↑${this._fmtPhySpeed(d.m.phyTx)}`
+            : "1 Gbps LAN";
+
+        return `
+          <div class="flow-dev-card cat-${d.cat}" data-fentity="${d.entityId || ""}">
+            <div class="flow-dev-top">
+              <div class="dev-id">
+                <div class="dev-icon"><ha-icon icon="${icon}"></ha-icon></div>
+                <div class="dev-name" title="${this._escape(d.hostname)}">${this._escape(d.hostname)}</div>
+              </div>
+              <span class="net-badge cat-${d.cat}">${this._escape(d.band)} · ${this._escape(sigText)}</span>
+            </div>
+
+            <div class="txrx-bars">
+              <div class="txrx-row">
+                <span class="txrx-lbl rx">↓ RX</span>
+                <div class="txrx-track">
+                  <div class="txrx-fill rx" style="width: ${rxPct}%;"></div>
+                </div>
+                <span class="txrx-val">${rxText}</span>
+              </div>
+              <div class="txrx-row">
+                <span class="txrx-lbl tx">↑ TX</span>
+                <div class="txrx-track">
+                  <div class="txrx-fill tx" style="width: ${txPct}%;"></div>
+                </div>
+                <span class="txrx-val">${txText}</span>
+              </div>
+            </div>
+
+            <div class="flow-dev-foot">
+              <span class="flow-dev-meta">${this._escape(d.ip)}</span>
+              <span>${phySummary}</span>
+              <strong>${totalDataTxt}</strong>
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+
+    bodyEl.innerHTML = `
+      <div class="flow-diagram-wrap">
+        <svg class="flow-svg" viewBox="0 0 560 310" preserveAspectRatio="none">
+          ${svgPaths.join("")}
+        </svg>
+
+        <!-- WAN Node -->
+        <div class="flow-node" style="left: 10.4%; top: 51.6%;" title="WAN IP: ${this._escape(data.wanIp)}">
+          <span class="flow-node-label">WAN / ISP</span>
+          <div class="flow-circle" style="--node-color: var(--be-accent);">
+            <ha-icon icon="mdi:earth"></ha-icon>
+            <span class="flow-val">${wanVal}</span>
+            <span class="flow-sub">${this._escape(wanSub)}</span>
+          </div>
+        </div>
+
+        <!-- Central BE230 Router Hub -->
+        <div class="flow-node" id="flow-hub-node" style="left: 33.0%; top: 51.6%;" title="Click to show all bands (${this._escape(data.lanIp)})">
+          <span class="flow-node-label">Archer BE230</span>
+          <div class="flow-circle lg ${this._flowBandFilter === "all" ? "selected" : ""}" style="--node-color: var(--be-online);">
+            <span class="flow-sub">CPU ${data.cpuUsage ?? 0}%</span>
+            <ha-icon icon="mdi:router-wireless"></ha-icon>
+            <span class="flow-val">${activeDevices.length} Online</span>
+          </div>
+          <span class="flow-node-label bottom">${this._escape(data.lanIp)}</span>
+        </div>
+
+        <!-- 4 Band Nodes -->
+        ${bandNodesHtml}
+
+        <!-- Top 4 Active Client Nodes -->
+        ${top4NodesHtml}
+      </div>
+
+      <div class="dist-section">
+        <div class="dist-bar">${distBarHtml}</div>
+        <div class="dist-legend">${distLegendHtml}</div>
+      </div>
+
+      <div class="flow-matrix-header">
+        <span>Active Devices TX / RX Distribution (${displayedDevices.length} of ${activeDevices.length})</span>
+        ${
+          this._flowBandFilter !== "all"
+            ? `<button class="btn active" id="flow-reset-band">Showing: ${this._flowBandFilter.toUpperCase()} ✕</button>`
+            : `<span>Sorted by ${mode === "live" ? "Live Throughput" : mode === "traffic" ? "Total Traffic" : "Link Rate (Mbps)"}</span>`
+        }
+      </div>
+
+      <div class="flow-devices-grid">
+        ${devicesMatrixHtml || `<div class="empty-state">No active devices in this band.</div>`}
+      </div>
+    `;
+
+    bodyEl.querySelector("#flow-hub-node")?.addEventListener("click", () => {
+      this._flowBandFilter = "all";
+      this._render();
+    });
+
+    bodyEl.querySelector("#flow-reset-band")?.addEventListener("click", () => {
+      this._flowBandFilter = "all";
+      this._render();
+    });
+
+    bodyEl.querySelectorAll("[data-fband]").forEach((el) => {
+      el.addEventListener("click", () => {
+        const b = el.dataset.fband;
+        this._flowBandFilter = this._flowBandFilter === b ? "all" : b;
+        this._render();
+      });
+    });
+
+    bodyEl.querySelectorAll("[data-fentity]").forEach((el) => {
+      el.addEventListener("click", () => {
+        const eid = el.dataset.fentity;
+        if (eid) this._openMoreInfo(eid);
+      });
+    });
+  }
+
   _escape(str) {
     return String(str ?? "")
       .replace(/&/g, "&amp;")
@@ -1596,14 +2474,41 @@ class TplinkBe230Card extends HTMLElement {
   }
 }
 
+class TplinkBe230FlowCard extends TplinkBe230Card {
+  static getStubConfig() {
+    return {
+      title: "Network Traffic & TX/RX Flow",
+      flow: true,
+      compact: false,
+    };
+  }
+
+  setConfig(config) {
+    super.setConfig({
+      title: "Network Traffic & TX/RX Flow",
+      flow: true,
+      ...config,
+    });
+  }
+}
+
 if (!customElements.get("tplink-be230-card")) {
   customElements.define("tplink-be230-card", TplinkBe230Card);
+}
+if (!customElements.get("tplink-be230-flow-card")) {
+  customElements.define("tplink-be230-flow-card", TplinkBe230FlowCard);
 }
 
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "tplink-be230-card",
   name: "TP-Link Archer BE230 Network & DHCP Manager",
-  description: "Displays connected devices and provides a full DHCP Reservation & Pool Manager for the TP-Link Archer BE230.",
+  description: "Displays connected devices, animated TX/RX traffic flow, and DHCP Reservation Manager for the TP-Link Archer BE230.",
+  preview: true,
+});
+window.customCards.push({
+  type: "tplink-be230-flow-card",
+  name: "TP-Link Archer BE230 Live TX/RX Flow Card",
+  description: "Animated hierarchical network flow diagram and real-time per-device TX/RX bandwidth distribution.",
   preview: true,
 });

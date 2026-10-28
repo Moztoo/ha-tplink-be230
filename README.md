@@ -47,6 +47,8 @@ ha-tplink-be230/
   * `network_type`: Raw network identifier (`host_5g`, `host_2g`, `host_mlo`, `wired`, `guest_5g`, `iot_2g`, etc.)
   * `band`: Frequency band (`5GHz`, `2.4GHz`, `6GHz`, `MLO`, `LAN`)
   * `signal`, `packets_sent`, `packets_received`, `down_speed`, `up_speed`, `last_seen`
+* **Unknown MAC Detection Event (`tplink_be230_new_device_connected`):**
+  Persists known MAC addresses in Home Assistant storage and automatically fires a `tplink_be230_new_device_connected` bus event whenever an unrecognized MAC connects (`hostname`, `ip`, `mac`, `network`, `band`, `is_guest`).
 * **Router Telemetry Sensors & Controls:**
   * Connected Devices count & full device list attribute
   * WAN IPv4 & LAN IPv4 sensors
@@ -78,6 +80,10 @@ The included [`lovelace/tplink-be230-card.js`](./lovelace/tplink-be230-card.js) 
 * **Detailed Mode (`overview: false`):**
   * Full device cards showing **Hostname**, **IP** (click to copy), **MAC** (click to copy), **Connected Network Badge**, and a **1-click `📌 Static` / `⏱️ Pin IP` button** to reserve or edit any device's static IP on the fly.
   * Instant search bar (by name, IP, or MAC), network filter tabs (`Active`, `5GHz`, `2.4GHz`, `LAN`, `Guest/IoT`, `📌 Static`, `All`), and `Compact` / `Grid` toggle.
+* **Animated TX/RX Network Flow View (`⚡ Traffic Flow` tab, `flow: true`, or `custom:tplink-be230-flow-card`):**
+  * **Hierarchical Animated SVG Topology:** Displays real-time particle flows from `WAN / ISP` → `Archer BE230 Hub` → `5GHz / MLO`, `2.4GHz`, `Ethernet LAN`, `IoT / Guest` → `Top 4 Active Clients`.
+  * **3 Reactive Metric Modes:** Toggle between **`⚡ Live RX/TX`** (real-time download/upload throughput), **`📶 Link Rate`** (negotiated Wi-Fi/LAN PHY speed in Mbps), and **`📊 Total Data`** (cumulative GB/MB per device).
+  * **Proportional Breakdown Bar & All-Active-Devices TX/RX Matrix:** Interactive 2-column grid showing dual animated `↓ RX` and `↑ TX` bars for every active client on the network.
 * **Built-In DHCP Manager (`DHCP Manager` header tab or `default_view: "dhcp"`):**
   * View & edit **DHCP Server Pool & DNS settings** (`Start IP`, `End IP`, `Lease Time`, `Default Gateway`, `Primary & Secondary DNS`) directly from Home Assistant.
   * Unified table of **Static IP Reservations (`📌`)** and **Active DHCP Leases (`⏱️`)** with remaining lease time.
